@@ -225,30 +225,23 @@ public class LazyHolder<T> {
     }
 
     @SuppressWarnings("unchecked")
-    private static<T> T getNull() {
-        return (T) NULL;
-    }
+    private static<T> T getNull() { return (T) NULL; }
 
     @SuppressWarnings("unchecked")
-    private static<T> T getCreating() {
-        return (T) CREATING;
-    }
+    private static<T> T getCreating() { return (T) CREATING; }
 
     volatile Versioned<T> ref = getNull();
 
     private static final VarHandle VALUE;
     static {
         try {
-            MethodHandles.Lookup l = MethodHandles.lookup();
-            VALUE = l.findVarHandle(LazyHolder.class, "ref", Versioned.class);
+            VALUE = MethodHandles.lookup().findVarHandle(LazyHolder.class, "ref", Versioned.class);
         } catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
         }
     }
 
-    public boolean isNull() {
-        return NULL == VALUE.getOpaque(this);
-    }
+    public boolean isNull() { return NULL == VALUE.getOpaque(this); }
     final StackTraceElement[] es;
 
     LazyHolder(
@@ -262,9 +255,7 @@ public class LazyHolder<T> {
     }
 
     @SuppressWarnings("unchecked")
-    public T getAndDestroy() {
-        return ((Versioned<T>) VALUE.getAndSet(this, getNull())).value();
-    }
+    public T getAndDestroy() { return ((Versioned<T>) VALUE.getAndSet(this, getNull())).value(); }
 
     /**
      * @return true if the {@code expect}-ed value matched the inner value.
@@ -285,9 +276,7 @@ public class LazyHolder<T> {
      * @return The current value.
      * */
     @SuppressWarnings("unchecked")
-    public T getOpaque() {
-        return ((Versioned<T>) VALUE.getOpaque(this)).value();
-    }
+    public T getOpaque() { return ((Versioned<T>) VALUE.getOpaque(this)).value(); }
 
     /**
      * Lazy and stateful {@link java.util.function.Supplier}.
@@ -429,9 +418,7 @@ public class LazyHolder<T> {
             this.builder = builder;
         }
 
-        public Function(java.util.function.Function<S, T> builder) {
-            this(Lambdas.Identities.identity(), builder);
-        }
+        public Function(java.util.function.Function<S, T> builder) { this(Lambdas.Identities.identity(), builder); }
 
         @SuppressWarnings("StatementWithEmptyBody")
         @Override
@@ -475,9 +462,7 @@ public class LazyHolder<T> {
                 super(unmodifiable, entries);
             }
 
-            public Default() {
-                super();
-            }
+            public Default() { super(); }
         }
         /**The reason behind the map NOT being of at least of type AbstractEntry...
          * is because there should be a flexible way to populate it from the start.*/
@@ -511,9 +496,7 @@ public class LazyHolder<T> {
                     );
                 }
 
-                private Default(K key, Supplier<T> value) {
-                    super(key, value);
-                }
+                private Default(K key, Supplier<T> value) { super(key, value); }
             }
         }
 
@@ -596,19 +579,13 @@ public class LazyHolder<T> {
 
 
         @Override
-        public V get(Object key) {
-            return map.get(key);
-        }
+        public V get(Object key) { return map.get(key); }
 
         @Override
-        public V remove(Object key) {
-            return map.remove(key);
-        }
+        public V remove(Object key) { return map.remove(key); }
 
         @Override
-        public Set<Entry<K, V>> entrySet() {
-            return map.entrySet();
-        }
+        public Set<Entry<K, V>> entrySet() { return map.entrySet(); }
 
         @SafeVarargs
         private <E extends SupplierEntry<?, K, V>>
@@ -635,9 +612,7 @@ public class LazyHolder<T> {
         }
 
         @Override
-        public void forEach(BiConsumer<? super K, ? super V> action) {
-            map.forEach(action);
-        }
+        public void forEach(BiConsumer<? super K, ? super V> action) { map.forEach(action); }
     }
 
     /**
@@ -659,9 +634,7 @@ public class LazyHolder<T> {
             }
 
             @SafeVarargs
-            public Default(SupplierEntry.Default<Class<?>, ?>... entries) {
-                super(true, entries);
-            }
+            public Default(SupplierEntry.Default<Class<?>, ?>... entries) { super(true, entries); }
 
             @SafeVarargs
             public <E extends SupplierEntry<?, Class<?>, Supplier<?>>> Default(boolean unmodifiable, E... entries) {
@@ -698,8 +671,7 @@ public class LazyHolder<T> {
             super(true, entries);
         }
 
-        private SingletonCollection() {
-        }
+        private SingletonCollection() { }
 
         public<C> C get(Class<C> tClass) {
             Supplier<?> supplier = Objects.requireNonNull(map.get(tClass), () -> "Type: " + tClass + " not present in map " + map);

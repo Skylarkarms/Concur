@@ -19,13 +19,9 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
         localArr = EMPTY;
     }
 
-    public boolean isEmpty() {
-        return EMPTY == get();
-    }
+    public boolean isEmpty() { return EMPTY == get(); }
 
-    public boolean isEmptyOpaque() {
-        return EMPTY == VALUE.getOpaque(this);
-    }
+    public boolean isEmptyOpaque() { return EMPTY == VALUE.getOpaque(this); }
 
     @SuppressWarnings("FieldMayBeFinal")
     private volatile T[] localArr;
@@ -42,13 +38,9 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
         return snapshot;
     }
 
-    public T[] getSnapshot() {
-        return snapshot;
-    }
+    public T[] getSnapshot() { return snapshot; }
 
-    public boolean clearSnapshot(T[] expected) {
-        return SNAPSHOT.compareAndSet(this, expected, EMPTY);
-    }
+    public boolean clearSnapshot(T[] expected) { return SNAPSHOT.compareAndSet(this, expected, EMPTY); }
 
     static {
         try {
@@ -153,9 +145,7 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
     }
 
     /**Non-contentious remove, will try ONCE and not throw*/
-    public boolean nonContRemove(T t) {
-        return nonContRemove(t1 -> t1 == t);
-    }
+    public boolean nonContRemove(T t) { return nonContRemove(t1 -> t1 == t); }
 
     /**Non-contentious remove, will try ONCE and not throw*/
     public boolean nonContRemove(Predicate<T> when) {
@@ -236,14 +226,10 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
         return dest_arr;
     }
 
-    public boolean contains(T object) {
-        return contains(t -> t == object);
-    }
+    public boolean contains(T object) { return contains(t -> t == object); }
 
     @SuppressWarnings("unchecked")
-    public boolean contains(Predicate<T> when) {
-        return indexOf((T[])VALUE.getOpaque(this), when) != -1;
-    }
+    public boolean contains(Predicate<T> when) { return indexOf((T[])VALUE.getOpaque(this), when) != -1; }
 
     /**Wil shortC upon first one found*/
     private static<E> int indexOf(E[] prevArray, Predicate<E> when) {
@@ -255,9 +241,7 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
     }
 
     @Override
-    public T[] get() {
-        return localArr;
-    }
+    public T[] get() { return localArr; }
 
     @Override
     public String toString() {

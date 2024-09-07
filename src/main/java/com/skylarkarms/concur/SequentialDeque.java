@@ -36,10 +36,9 @@ public class SequentialDeque {
 
     static {
         try {
-            MethodHandles.Lookup l = MethodHandles.lookup();
-            FLUSHING = l.findVarHandle(SequentialDeque.class, "flushing", boolean.class);
+            FLUSHING = MethodHandles.lookup().findVarHandle(SequentialDeque.class, "flushing", boolean.class);
         } catch (IllegalAccessException | NoSuchFieldException e) {
-            throw new RuntimeException(e);
+            throw new ExceptionInInitializerError(e);
         }
     }
     public SequentialDeque(Executor exitExecutor) {
@@ -117,21 +116,15 @@ public class SequentialDeque {
         }
     }
 
-    public SequentialDeque() {
-        this(null);
-    }
+    public SequentialDeque() { this(null); }
 
-    public boolean isFlushing() {
-        return flushing;
-    }
+    public boolean isFlushing() { return flushing; }
 
     /**
      * Will always return {@code false} If a flush is already processing
      * OR {@code true} If this method triggered a flush.
      * */
-    public boolean beginFlush() {
-        return flusher.getAsBoolean();
-    }
+    public boolean beginFlush() { return flusher.getAsBoolean(); }
 
     /**
      * Unspecified concurrent behavior...
@@ -193,9 +186,7 @@ public class SequentialDeque {
         }
 
         @Override
-        public boolean pushAndFlush(Runnable seq) {
-            return super.pushAndFlush(getRunnable(seq));
-        }
+        public boolean pushAndFlush(Runnable seq) { return super.pushAndFlush(getRunnable(seq)); }
 
         private Runnable getRunnable(Runnable seq) {
             return () -> {

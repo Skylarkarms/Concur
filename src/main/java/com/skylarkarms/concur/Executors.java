@@ -43,8 +43,11 @@ public final class Executors {
                 };
     }
 
-    public static final Thread.UncaughtExceptionHandler
-            auto_exit_handler = AUTO_EXIT_HANDLER(null);
+    public Thread.UncaughtExceptionHandler auto_exit_handler() {return auto_exit_handler.ref; }
+    private record auto_exit_handler() {
+        static final Thread.UncaughtExceptionHandler ref
+                = AUTO_EXIT_HANDLER(null);
+    }
 
     private static final String
             max_hand_tag = "Skylarkarms.Concurrents.com.skylarkarms.concurrents.Executors.ThreadFactory#MAX_PRIOR. " +
@@ -66,7 +69,10 @@ public final class Executors {
         };
     }
 
-    static final ThreadFactory MAX_PRIOR = factory(Thread.MAX_PRIORITY, auto_exit_handler);
+    public static ThreadFactory MAX_PRIOR() {return MAX_PRIOR.ref;}
+    private record MAX_PRIOR() {static final ThreadFactory ref
+            = factory(Thread.MAX_PRIORITY, auto_exit_handler.ref);
+    }
 
     private static final String
             executor_tag = "Skylarkarms.Concurrents.com.skylarkarms.concurrents.Executors.Executor#UNBRIDLED."
@@ -76,9 +82,7 @@ public final class Executors {
     ) {
         return new Executor() {
             @Override
-            public void execute(Runnable command) {
-                factory.newThread(command).start();
-            }
+            public void execute(Runnable command) { factory.newThread(command).start(); }
 
             @Override
             public String toString() {
@@ -90,10 +94,13 @@ public final class Executors {
 
     /**
      * A limitless/pool-less Executor that delivers unbridled {@link Thread}'s
-     * from {@link #MAX_PRIOR} factory
+     * from {@link MAX_PRIOR#ref} factory
      * with an {@link Executors#auto_exit_handler} exception handler
      * */
-    public static final Executor UNBRIDLED = UNBRIDLED(MAX_PRIOR);
+    public static Executor UNBRIDLED() {return UNBRIDLED.ref;}
+    private record UNBRIDLED() {
+        static final Executor ref = UNBRIDLED(MAX_PRIOR.ref);
+    }
 
     /**
      * @return a {@link ExecutorDelayer.ContentiousExecutor}.
@@ -127,21 +134,15 @@ public final class Executors {
         public abstract boolean onExecute(Runnable command);
 
         @Override
-        public final void execute(Runnable command) {
-            onExecute(command);
-        }
+        public final void execute(Runnable command) { onExecute(command); }
 
-        final void sysOnExecute(Runnable command) {
-            super.execute(command);
-        }
+        final void sysOnExecute(Runnable command) { super.execute(command); }
 
         public boolean interrupt() {
             throw new IllegalStateException("Implemented when a duration longer than 0 is specified.");
         }
 
-        public boolean isDelayer() {
-            return false;
-        }
+        public boolean isDelayer() { return false; }
 
         public static ExecutorDelayer getExecutorDelayer(Executor executor, TimeUnit unit, long duration) {
             if (duration > 0) return new Delayer(executor, unit, duration);
@@ -190,7 +191,7 @@ public final class Executors {
             }
 
             Runnable command;
-            static VarHandle LEADER, COMMAND;
+            static final VarHandle LEADER, COMMAND;
 
             static {
                 MethodHandles.Lookup lookup = MethodHandles.lookup();
@@ -200,7 +201,7 @@ public final class Executors {
                             Runnable.class);
                     LEADER = lookup.findVarHandle(Delayer.class, "leader", Leader.class);
                 } catch (NoSuchFieldException | IllegalAccessException e) {
-                    throw new RuntimeException(e);
+                    throw new ExceptionInInitializerError(e);
                 }
             }
 
@@ -246,16 +247,12 @@ public final class Executors {
             }
 
             @Override
-            public boolean isDelayer() {
-                return true;
-            }
+            public boolean isDelayer() { return true; }
 
             final class Leader {
                 final Thread lead;
 
-                Leader() {
-                    lead = Thread.currentThread();
-                }
+                Leader() { lead = Thread.currentThread(); }
 
                 private static int ver = 0;
 
@@ -281,7 +278,7 @@ public final class Executors {
                     try {
                         STATE = MethodHandles.lookup().findVarHandle(Leader.class, "state", int.class);
                     } catch (NoSuchFieldException | IllegalAccessException e) {
-                        throw new RuntimeException(e);
+                        throw new ExceptionInInitializerError(e);
                     }
                 }
 
@@ -387,7 +384,7 @@ public final class Executors {
              * */
             public static void oneShot(
                     long duration, TimeUnit unit, Runnable runnable) {
-                UNBRIDLED.execute(
+                UNBRIDLED.ref.execute(
                         () -> {
                             LockSupport.parkNanos(unit.toNanos(duration));
                             runnable.run();
@@ -423,7 +420,7 @@ public final class Executors {
                             ContentiousExecutor.class, "commandRef",
                             Runnable.class);
                 } catch (NoSuchFieldException | IllegalAccessException e) {
-                    throw new RuntimeException(e);
+                    throw new ExceptionInInitializerError(e);
                 }
             }
             ContentiousExecutor(Executor executor) {
@@ -471,7 +468,7 @@ public final class Executors {
                 int corePoolSize, boolean preestartCores, int maxPoolSize, long keepAliveTime, TimeUnit unit) {
             this(
                     corePoolSize, preestartCores, maxPoolSize, keepAliveTime, unit,
-                    factory(Thread.NORM_PRIORITY, auto_exit_handler)
+                    factory(Thread.NORM_PRIORITY, auto_exit_handler.ref)
             );
         }
 

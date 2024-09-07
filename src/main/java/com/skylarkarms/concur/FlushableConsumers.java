@@ -20,48 +20,34 @@ import java.util.function.Supplier;
 public final class FlushableConsumers<X> implements Consumer<X> {
     private final Deque<Consumer<? super X>> consumers;
 
-    public FlushableConsumers(Deque<Consumer<? super X>> consumers) {
-        this.consumers = consumers;
-    }
+    public FlushableConsumers(Deque<Consumer<? super X>> consumers) { this.consumers = consumers; }
 
     private volatile Process<X> process = Process.init();
 
     @SuppressWarnings("unchecked")
-    public boolean isProcessing() {
-        return ((Process<X>)PROCESS.getOpaque(this)).busy();
-    }
+    public boolean isProcessing() { return ((Process<X>)PROCESS.getOpaque(this)).busy(); }
     private static final VarHandle PROCESS;
     static {
         try {
             PROCESS = MethodHandles.lookup().findVarHandle(FlushableConsumers.class, "process", Process.class);
         } catch (IllegalAccessException | NoSuchFieldException e) {
-            throw new RuntimeException(e);
+            throw new ExceptionInInitializerError(e);
         }
     }
     static class Process<X> {
         final X value;
         private static final Process<?> idle = new Process<>(null), init = new Process<>(null) {
             @Override
-            boolean busy() {
-                return false;
-            }
+            boolean busy() { return false; }
         };
 
-        Process(X value) {
-            this.value = value;
-        }
+        Process(X value) { this.value = value; }
 
         @SuppressWarnings("unchecked")
-        static<S> Process<S> idle() {
-            return (Process<S>) idle;
-        }
+        static<S> Process<S> idle() { return (Process<S>) idle; }
         @SuppressWarnings("unchecked")
-        static<S> Process<S> init() {
-            return (Process<S>) init;
-        }
-        boolean busy() {
-            return this != idle;
-        }
+        static<S> Process<S> init() { return (Process<S>) init; }
+        boolean busy() { return this != idle; }
     }
 
     @SuppressWarnings("StatementWithEmptyBody")
@@ -122,9 +108,7 @@ public final class FlushableConsumers<X> implements Consumer<X> {
     /**
      * Removes the {@link Consumer} waiting to be flushed
      * */
-    public boolean remove(Consumer<? super X> consumer) {
-        return consumers.remove(consumer);
-    }
+    public boolean remove(Consumer<? super X> consumer) { return consumers.remove(consumer); }
 
     /**
      * throws if already contained in Dequeue
@@ -138,9 +122,7 @@ public final class FlushableConsumers<X> implements Consumer<X> {
         }
     }
 
-    public void clear() {
-        consumers.clear();
-    }
+    public void clear() { consumers.clear(); }
 
     /**
      * This class will store a {@link T} 'value', and evaluate if a {@link Predicate} 'test' is satisfied({@code true}).
@@ -162,19 +144,13 @@ public final class FlushableConsumers<X> implements Consumer<X> {
         private final FlushableConsumers<T> consumers;
         static final VarHandle VALUE;
 
-        public boolean isNull() {
-            return null == value.val;
-        }
+        public boolean isNull() { return null == value.val; }
 
-        public void clearConsumers() {
-            consumers.clear();
-        }
+        public void clearConsumers() { consumers.clear(); }
 
         @Override
         @SuppressWarnings("unchecked")
-        public T get() {
-            return ((ValTest<T>)VALUE.getOpaque(this)).val;
-        }
+        public T get() { return ((ValTest<T>)VALUE.getOpaque(this)).val; }
 
         private static final String stateChangedErr = "The state appears to have been changed before 'flush' " +
                 "\n in a side-effect fashion, use 'tryFlush' instead.";
@@ -222,14 +198,10 @@ public final class FlushableConsumers<X> implements Consumer<X> {
             } else return false;
         }
 
-        public boolean setNull() {
-            return VALUE.compareAndSet(this, VALUE.getOpaque(this), ValTest.getDefault());
-        }
+        public boolean setNull() { return VALUE.compareAndSet(this, VALUE.getOpaque(this), ValTest.getDefault()); }
 
         @SuppressWarnings("unchecked")
-        public T getAndClear() {
-            return ((ValTest<T>)VALUE.getAndSet(this, ValTest.getDefault())).val;
-        }
+        public T getAndClear() { return ((ValTest<T>)VALUE.getAndSet(this, ValTest.getDefault())).val; }
 
         public boolean setIfNull(Supplier<T> value) {
             final ValTest<T> curr, newVal;
@@ -246,9 +218,7 @@ public final class FlushableConsumers<X> implements Consumer<X> {
             } else return false;
         }
 
-        private synchronized boolean compare(ValTest<T> newVal) {
-            return newVal == value;
-        }
+        private synchronized boolean compare(ValTest<T> newVal) { return newVal == value; }
 
         @SuppressWarnings("unchecked")
         public boolean tryFlush() {
@@ -273,13 +243,9 @@ public final class FlushableConsumers<X> implements Consumer<X> {
         record ValTest<T>(T val, boolean test) {
             static ValTest<?> DEF = new ValTest<>(null, false);
             @SuppressWarnings("unchecked")
-            static<S> ValTest<S> getDefault() {
-                return (ValTest<S>) DEF;
-            }
+            static<S> ValTest<S> getDefault() { return (ValTest<S>) DEF; }
 
-            public boolean isDefault() {
-                return this == DEF;
-            }
+            public boolean isDefault() { return this == DEF; }
         }
 
         static {
@@ -287,7 +253,7 @@ public final class FlushableConsumers<X> implements Consumer<X> {
                 VALUE = MethodHandles.lookup().findVarHandle(Acquire.class,
                         "value", ValTest.class);
             } catch (IllegalAccessException | NoSuchFieldException e) {
-                throw new RuntimeException(e);
+                throw new ExceptionInInitializerError(e);
             }
         }
 
@@ -372,8 +338,6 @@ public final class FlushableConsumers<X> implements Consumer<X> {
                 return false;
             }
         }
-        public boolean remove(Consumer<? super T> waiter) {
-            return consumers.remove(waiter);
-        }
+        public boolean remove(Consumer<? super T> waiter) { return consumers.remove(waiter); }
     }
 }
