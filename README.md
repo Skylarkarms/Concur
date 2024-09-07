@@ -1,6 +1,8 @@
 # Concur
 [latest version] = `1.0.1`
 
+[dependencies] = [`io.github.skylarkarms:lambdas:1.0.1`](https://github.com/Skylarkarms/Lambdas)
+
 Additional concurrent utilities for the Java environment.
 
 ### Implementation
