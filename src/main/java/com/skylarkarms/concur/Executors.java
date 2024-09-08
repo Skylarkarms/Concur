@@ -24,9 +24,7 @@ public final class Executors {
                     }
 
                     @Override
-                    public String toString() {
-                        return handler_tag;
-                    }
+                    public String toString() { return handler_tag; }
                 } :
                 new Thread.UncaughtExceptionHandler() {
                     @Override
@@ -37,13 +35,11 @@ public final class Executors {
                     }
 
                     @Override
-                    public String toString() {
-                        return handler_tag;
-                    }
+                    public String toString() { return handler_tag; }
                 };
     }
 
-    public Thread.UncaughtExceptionHandler auto_exit_handler() {return auto_exit_handler.ref; }
+    public static Thread.UncaughtExceptionHandler auto_exit_handler() {return auto_exit_handler.ref; }
     private record auto_exit_handler() {
         static final Thread.UncaughtExceptionHandler ref
                 = AUTO_EXIT_HANDLER(null);
@@ -63,9 +59,7 @@ public final class Executors {
             }
 
             @Override
-            public String toString() {
-                return max_hand_tag.concat(handler.toString()).concat("]");
-            }
+            public String toString() { return max_hand_tag.concat(handler.toString()).concat("]"); }
         };
     }
 
@@ -124,9 +118,7 @@ public final class Executors {
     }
 
     public static abstract class ExecutorDelayer extends BaseExecutor {
-        protected ExecutorDelayer(Executor executor) {
-            super(executor);
-        }
+        protected ExecutorDelayer(Executor executor) { super(executor); }
 
         /**
          * @return true on a success execute.
@@ -186,9 +178,7 @@ public final class Executors {
              *     </li>
              * </ul>
              * */
-            public boolean isWaiting() {
-                return leader.isWaiting();
-            }
+            public boolean isWaiting() { return leader.isWaiting(); }
 
             Runnable command;
             static final VarHandle LEADER, COMMAND;
@@ -236,9 +226,7 @@ public final class Executors {
                 }
             };
 
-            Delayer(Executor executor, TimeUnit unit, long duration) {
-                this(executor, unit.toNanos(duration));
-            }
+            Delayer(Executor executor, TimeUnit unit, long duration) { this(executor, unit.toNanos(duration)); }
 
             Delayer(Executor executor, long nanoTime) {
                 super(executor);
@@ -282,9 +270,7 @@ public final class Executors {
                     }
                 }
 
-                boolean isWaiting() {
-                    return waiting == (int)STATE.getOpaque(this);
-                }
+                boolean isWaiting() { return waiting == (int)STATE.getOpaque(this); }
 
                 /**
                  * @return true if properly closed, false if interrupted
@@ -423,9 +409,7 @@ public final class Executors {
                     throw new ExceptionInInitializerError(e);
                 }
             }
-            ContentiousExecutor(Executor executor) {
-                super(executor);
-            }
+            ContentiousExecutor(Executor executor) { super(executor); }
             /**
              * @return true, if this command triggers <p>
              * the creation of a new thread.
@@ -488,9 +472,7 @@ public final class Executors {
         }
 
         @Override
-        public void execute(Runnable command) {
-            executor.execute(command);
-        }
+        public void execute(Runnable command) { executor.execute(command); }
     }
     @FunctionalInterface
     public interface RetryExecutor {
@@ -550,9 +532,7 @@ public final class Executors {
             return GATE.compareAndSet(this, expectedValue, newValue);
         }
 
-        boolean tryOpen(VersionedObject prev) {
-            return compareAndSet(prev, VersionedObject.OPEN);
-        }
+        boolean tryOpen(VersionedObject prev) { return compareAndSet(prev, VersionedObject.OPEN); }
 
         boolean tryClose(VersionedObject prev) {
             return compareAndSet(prev, VersionedObject.CLOSE);
@@ -563,9 +543,7 @@ public final class Executors {
                     CLOSE = new VersionedObject(0),
                     OPEN = new VersionedObject(1);
 
-            public VersionedObject next() {
-                return new VersionedObject(version + 1);
-            }
+            public VersionedObject next() { return new VersionedObject(version + 1); }
 
             @Override
             public String toString() {
