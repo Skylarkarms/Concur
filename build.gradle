@@ -7,7 +7,7 @@ plugins {
 group = project.hasProperty('projectGroup') ? project.property('projectGroup') : 'default.group'
 version = project.hasProperty('projectVersion') ? project.property('projectVersion') : 'version'
 def projectCoordinate = project.hasProperty('projectCoordinate') ? project.property('projectCoordinate') : 'default_coord'
-def projectName = project.hasProperty('projectName') ? project.property('projectName') : 'default_name'
+String projectName = project.hasProperty('projectName') ? project.property('projectName') : 'default_name'
 import com.vanniktech.maven.publish.SonatypeHost
 
 mavenPublishing {
@@ -55,7 +55,7 @@ repositories {
 }
 
 dependencies {
-    implementation('io.github.skylarkarms:lambdas:1.0.1')
+    implementation('io.github.skylarkarms:lambdas:1.0.2')
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.8.1'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.8.1'
 }
