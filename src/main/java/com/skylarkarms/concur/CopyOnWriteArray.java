@@ -245,9 +245,10 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
 
     @Override
     public String toString() {
-        return "com.skylarkarms.concurrents.CopyOnWriteArray{" +
-                "\n local=" + Arrays.toString(get()) +
-                "\n size=" + get().length +
-                "\n}";
+        String hash = Integer.toString(hashCode());
+        return "CopyOnWriteArray@".concat(hash).concat("{" +
+                "\n >>> local=\n" + Arrays.toString(localArr).concat(",").indent(3) +
+                " >>> size=" + localArr.length +
+                "\n}@").concat(hash);
     }
 }

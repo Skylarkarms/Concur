@@ -17,7 +17,7 @@ import java.util.function.UnaryOperator;
  * Lock-free lazy initialization holder.
  * <p> Lazy concurrent holder that will spinlock concurrent calls until the inner value is considered
  * {@link #CREATED}.
- * <p> Different spin-lock strategies can be defined at {@link TimeoutParams} set via {@link UnaryOperator}&lt;{@link TimeoutParamBuilder}&gt;
+ * <p> Different spin-lock strategies can be defined at {@link TimeoutSpinner} set via {@link UnaryOperator}&lt;{@link TimeoutParamBuilder}&gt;
  * */
 public class LazyHolder<T> {
     /**
@@ -40,22 +40,141 @@ public class LazyHolder<T> {
      * */
     CREATING = new Versioned<>(CREATING_PHASE, null);
 
-    /**
-     * The value to define the {@link LazyHolder.TimeoutParamBuilder#timeoutMillis} for all {@link LazyHolder}s by default
-     * */
-    public static long global_timeoutMillis = 1;
+    private static final SpinnerGlobalConfig def = SpinnerGlobalConfig.DEFAULT();
+    public static SpinnerGlobalConfig spinnerGlobalConfig = SpinnerGlobalConfig.DEFAULT();
 
-    /**
-     * The value to define the {@link LazyHolder.TimeoutParamBuilder#parkedSpans} for all {@link LazyHolder}s by default
-     * */
-    public static int global_parked_spans = 8;
+    public static final class SpinnerGlobalConfig {
+        long timeoutMillis;
+        public int parkedSpans;
+        int spanReads;
 
-    /**
-     * The value to define the {@link LazyHolder.TimeoutParamBuilder#spanReads} for all {@link LazyHolder}s by default
-     * */
-    public static final int global_span_reads = 6000;
+        boolean isUnbridled;
 
-    final TimeoutParams params;
+        public void set(
+                int spanReads
+                , int parkedSpans
+                , long timeoutMillis
+        ) {
+            lazyHolderAlreadyInitializedException();
+            this.spanReads = spanReads;
+            this.parkedSpans = parkedSpans;
+            this.timeoutMillis = timeoutMillis;
+            if (
+                    timeoutMillis == 0
+                            || timeoutMillis == Integer.MAX_VALUE
+                            || parkedSpans == 0
+                            || parkedSpans == Integer.MAX_VALUE
+                            || spanReads == 0
+                            || spanReads == Integer.MAX_VALUE
+            ) throw new IllegalStateException("Use unbridled() instead");
+        }
+
+        public void setUnbridled() {
+            isUnbridled = true;
+            this.spanReads = 0;
+            this.parkedSpans = 0;
+            this.timeoutMillis = 0;
+        }
+
+        boolean grabbed;
+
+        void lazyHolderAlreadyInitializedException() {
+            if (grabbed) throw new IllegalStateException(
+                    "A LazyHolder instance has already been initialized, " +
+                            "\n the SpinnerGlobalConfig parameters can only be set before any LazyHolder instantiation."
+            );
+        }
+
+        SpinnerGlobalConfig grabInstance() {
+            grabbed = true;
+            return this;
+        }
+
+        /**
+         * The value to define the {@link LazyHolder.TimeoutParamBuilder#timeoutMillis} for all {@link LazyHolder}s by default
+         * */
+        static final long global_timeoutMillis = 1;
+
+        /**
+         * The value to define the {@link LazyHolder.TimeoutParamBuilder#parkedSpans} for all {@link LazyHolder}s by default
+         * */
+        static final int global_parked_spans = 8;
+
+        /**
+         * The value to define the {@link LazyHolder.TimeoutParamBuilder#spanReads} for all {@link LazyHolder}s by default
+         * */
+        static final int global_span_reads = 6000;
+
+        /**
+         * @return a {@link SpinnerGlobalConfig} instance with the predefined values:
+         * <ul>
+         *     <li>
+         *         {@link #global_timeoutMillis}
+         *     </li>
+         *     <li>
+         *         {@link #global_parked_spans}
+         *     </li>
+         *     <li>
+         *         {@link #global_span_reads}
+         *     </li>
+         * </ul>
+         * */
+        static SpinnerGlobalConfig DEFAULT(){
+            return new SpinnerGlobalConfig(
+                global_timeoutMillis, global_parked_spans, global_span_reads);
+        }
+
+        SpinnerGlobalConfig(long timeoutMillis, int parkedSpans, int spanReads) {
+            this.timeoutMillis = timeoutMillis;
+            assert parkedSpans != 0;
+            this.parkedSpans = parkedSpans;
+            this.spanReads = spanReads;
+        }
+
+        public SpinnerGlobalConfig setParkedSpans(int parkedSpans) {
+            if (parkedSpans == 0 || parkedSpans == Integer.MAX_VALUE) throw new IllegalStateException("Use unbridled() instead");
+            lazyHolderAlreadyInitializedException();
+            this.parkedSpans = parkedSpans;
+            return this;
+        }
+
+        public SpinnerGlobalConfig setSpanReads(int spanReads) {
+            if (spanReads == 0 || spanReads == Integer.MAX_VALUE) throw new IllegalStateException("Use unbridled() instead");
+            lazyHolderAlreadyInitializedException();
+            this.spanReads = spanReads;
+            return this;
+        }
+
+        public SpinnerGlobalConfig setTimeoutMillis(long timeoutMillis) {
+            if (timeoutMillis == 0 || timeoutMillis == Integer.MAX_VALUE) throw new IllegalStateException("Use unbridled() instead");
+            lazyHolderAlreadyInitializedException();
+            this.timeoutMillis = timeoutMillis;
+            return this;
+        }
+
+        public void broaden(float multiplier) {
+            if (multiplier == 0 || multiplier == Integer.MAX_VALUE) isUnbridled = true;
+            else {
+                this.timeoutMillis = (long) (this.timeoutMillis * multiplier);
+                this.parkedSpans = (int) (this.parkedSpans * multiplier);
+                this.spanReads = (int) (this.spanReads * multiplier);
+            }
+        }
+
+        @Override
+        public String toString() {
+            String hash = Integer.toString(hashCode());
+            return "SpinnerGlobalConfig@" + hash + "{" +
+                    "\n >>> timeoutMillis=" + timeoutMillis +
+                    ",\n >>> parkedSpans=" + parkedSpans +
+                    ",\n >>> spanReads=" + spanReads +
+                    ",\n >>> isUnbridled=" + isUnbridled +
+                    ",\n >>> grabbed=" + grabbed +
+                    "\n }@" + hash;
+        }
+    }
+
+    final Spinner<T> spinner;
 
     /**
      * The parameters that will define the way in which busy {@link Supplier#get()} will get resolved before a TimeoutException throws.
@@ -73,6 +192,18 @@ public class LazyHolder<T> {
      * </ul>
      * */
     public final class TimeoutParamBuilder {
+        public TimeoutParamBuilder() {
+        }
+
+        TimeoutParamBuilder(
+                SpinnerGlobalConfig def
+        ) {
+            this.spanReads = def.spanReads;
+            this.parkedSpans = def.parkedSpans;
+            this.timeoutMillis = def.timeoutMillis;
+            this.isUnbridled = def.isUnbridled;
+        }
+
         /**
          * The allowed number of attempts ({@code threshold}) that the current Thread will {@code busy-wait} while
          * attempt a loading from the specified reference defined by the {@link java.util.function.Supplier}.
@@ -80,7 +211,8 @@ public class LazyHolder<T> {
          * the busy wait is considered "{@code failed}"
          * and the Thread will be parked.
          * */
-        private int spanReads = global_span_reads;
+        private int spanReads;
+
         /**
          * If the {@link #spanReads} threshold has been reached without a successful load,
          * the {@link Thread} will enter a {@link LockSupport#parkNanos(long)} mode before retrying a {@code busy-wait} once again.
@@ -88,12 +220,13 @@ public class LazyHolder<T> {
          * Once the amount of spans has reached the span number defined here, the {@link Supplier#get()} will throw an {@link Exception}.
          * The amount of nanos that the {@link Thread} will spent parked is defined by dividing {@link #timeoutMillis} by this number.
          * */
-        private int parkedSpans = global_parked_spans;
+        private int parkedSpans;
+
         /**
          * Comprises the sum of all the {@code nanos} the Thread wil spend parked ({@link LockSupport#parkNanos(long)}) after {@code failed busy-waits}:
          * <p> parkingNanos = timeoutMillis (to nanos) / {@link #parkedSpans}
          * */
-        private long timeoutMillis = global_timeoutMillis;
+        private long timeoutMillis;
 
         public TimeoutParamBuilder set(
                 int spanReads
@@ -103,18 +236,27 @@ public class LazyHolder<T> {
             this.spanReads = spanReads;
             this.parkedSpans = parkedSpans;
             this.timeoutMillis = timeoutMillis;
+            if (
+                    timeoutMillis == 0
+                            || timeoutMillis == Integer.MAX_VALUE
+                            || parkedSpans == 0
+                            || parkedSpans == Integer.MAX_VALUE
+                            || spanReads == 0
+                            || spanReads == Integer.MAX_VALUE
+            ) throw new IllegalStateException("Use unbridled() instead");
             return this;
         }
 
         /**To define {@link #parkedSpans}*/
         public TimeoutParamBuilder setParkedSpans(int parkedSpans) {
+            if (parkedSpans == 0 || parkedSpans == Integer.MAX_VALUE) throw new IllegalStateException("Use unbridled() instead");
             this.parkedSpans = parkedSpans;
             return this;
         }
 
         /**To define {@link #timeoutMillis}*/
         public TimeoutParamBuilder setTimeoutMillis(long timeoutMillis) {
-            if (timeoutMillis == 0) throw new IllegalStateException("Use unbridled() instead");
+            if (timeoutMillis == 0 || timeoutMillis == Integer.MAX_VALUE) throw new IllegalStateException("Use unbridled() instead");
             this.timeoutMillis = timeoutMillis;
             return this;
         }
@@ -125,20 +267,23 @@ public class LazyHolder<T> {
          * <p> The default values pre-defined are set at:
          * <ul>
          *     <li>
-         *         {@link LazyHolder#global_timeoutMillis}
+         *         {@link LazyHolder.SpinnerGlobalConfig#global_timeoutMillis}
          *     </li>
          *     <li>
-         *         {@link LazyHolder#global_parked_spans}
+         *         {@link LazyHolder.SpinnerGlobalConfig#global_parked_spans}
          *     </li>
          *     <li>
-         *         {@link LazyHolder#global_span_reads}
+         *         {@link LazyHolder.SpinnerGlobalConfig#global_span_reads}
          *     </li>
          * </ul>
          * */
         public TimeoutParamBuilder broaden(float multiplier) {
-            this.timeoutMillis = (long) (this.timeoutMillis * multiplier);
-            this.parkedSpans = (int) (this.parkedSpans * multiplier);
-            this.spanReads = (int) (this.spanReads * multiplier);
+            if (multiplier == 0 || multiplier == Integer.MAX_VALUE) isUnbridled = true;
+            else {
+                this.timeoutMillis = (long) (this.timeoutMillis * multiplier);
+                this.parkedSpans = (int) (this.parkedSpans * multiplier);
+                this.spanReads = (int) (this.spanReads * multiplier);
+            }
             return this;
         }
 
@@ -146,28 +291,61 @@ public class LazyHolder<T> {
          * To define {@link #spanReads}
          * */
         public TimeoutParamBuilder setSpanReads(int spanReads) {
+            if (spanReads == 0 || spanReads == Integer.MAX_VALUE) throw new IllegalStateException("Use unbridled() instead");
             this.spanReads = spanReads;
             return this;
         }
+        private boolean isUnbridled;
 
         public TimeoutParamBuilder unbridled() {
+            isUnbridled = true;
             this.timeoutMillis = 0;
             this.parkedSpans = 0;
             spanReads = Integer.MAX_VALUE;
             return this;
         }
 
-        private TimeoutParams build() {
-            return new TimeoutParams(timeoutMillis, parkedSpans, spanReads);
+        private Spinner<T> build() {
+            if (isUnbridled) {
+                if (
+                        (this.timeoutMillis > 0 && timeoutMillis < Integer.MAX_VALUE)
+                        || (this.parkedSpans > 0 && parkedSpans < Integer.MAX_VALUE)
+                        || (this.spanReads > 0 && spanReads < Integer.MAX_VALUE)
+                ) {
+                    throw new IllegalStateException("This parameter has been set as `unbridled, all parameters are defaulted to 0.");
+                }
+                return new Unbridled();
+            }
+            else return new TimeoutSpinner(timeoutMillis, parkedSpans, spanReads);
         }
     }
 
-    private final class TimeoutParams {
-        private TimeoutParams(
+    @FunctionalInterface
+    private interface Spinner<T> {
+        Versioned<T> spin();
+    }
+    private final class Unbridled implements Spinner<T> {
+
+        @Override
+        @SuppressWarnings("StatementWithEmptyBody")
+        public Versioned<T> spin() {
+            Versioned<T> prev;
+            while ((prev = ref).version() < CREATED) {}
+            return prev;
+        }
+
+        @Override
+        public String toString() {
+            return ">>> Spinner[unbridled]";
+        }
+    }
+    private final class TimeoutSpinner implements Spinner<T> {
+        private TimeoutSpinner(
                 long timeoutMillis
                 , int parkedSpans
                 , int spanReads
         ) {
+            assert parkedSpans != 0;
             this.millis = Duration.ofMillis(timeoutMillis);
             this.waitingNanos = millis.dividedBy(parkedSpans).toNanos();
             this.parkedSpans = parkedSpans;
@@ -178,7 +356,8 @@ public class LazyHolder<T> {
         private final long waitingNanos;
         private final int parkedSpans;
         private final int spanReads;
-        Versioned<T> timeOutSpin() {
+        @Override
+        public Versioned<T> spin() {
             Versioned<T> prev;
             int tries = 0, toThrow = 0;
             while ((prev = ref).version() < CREATED) {
@@ -187,20 +366,20 @@ public class LazyHolder<T> {
                     if (toThrow++ == parkedSpans) {
                         String m = es == null ?
                                 "TimeOutException:"
-                                        + "\n TimeoutParams = " + this
+                                        + "\n TimeoutSpinner = " + this
                                         + "\n Waiting = " + (waitingNanos * toThrow) + " nanos, "
                                         + "\n            for " + (toThrow) + " tries. "
                                         + "\n This Holder is waiting too much on this Supplier."
-                                        + "\n One option is to broaden the values of the TimeoutParams of the problematic Holder"
+                                        + "\n One option is to broaden the values of the TimeoutSpinner of the problematic Holder"
                                         + "\n If this Exception keeps appearing, the cause may be a cyclic referencing"
                                         + "\n  to find the possible source of the error, set 'com.skylarkarms.concurrents.LazyHolder.debug = true'."
                                 :
                                 "TimeOutException:"
-                                        + "\n TimeoutParams = " + this
+                                        + "\n TimeoutSpinner = " + this
                                         + "\n Waiting = " + (waitingNanos * toThrow) + " nanos, "
                                         + "\n            for " + (toThrow) + " tries. "
                                         + "\n This Holder is waiting too much on this Supplier."
-                                        + "\n One option is to broaden the values of the TimeoutParams of the problematic Holder"
+                                        + "\n One option is to broaden the values of the TimeoutSpinner of the problematic Holder"
                                         + "\n If this Exception keeps appearing, the cause may be a cyclic referencing"
                                         + "\n at = " + Exceptionals.formatStack(0, es);
                         throw new RuntimeException(m);
@@ -215,12 +394,13 @@ public class LazyHolder<T> {
 
         @Override
         public String toString() {
-            return "TimeoutParams{" +
-                    "\n >>> millis=" + millis.toMillis() + ", [nanos =" + millis.toNanos() +"]" +
-                    ",\n >>> waitingNanos=" + waitingNanos +
-                    ",\n >>> spans=" + parkedSpans +
-                    ",\n >>> spanReads=" + spanReads +
-                    "\n }";
+            return ">>> TimeoutSpinner{" +
+                    "\n   >>> millis= " + millis.toMillis()
+                    + "\n     - (nanos)= " + millis.toNanos()
+                    + ",\n   >>> waitingNanos= " + waitingNanos
+                    + ",\n   >>> spans= " + parkedSpans
+                    + ",\n   >>> spanReads= " + spanReads +
+                    "\n}";
         }
     }
 
@@ -245,13 +425,25 @@ public class LazyHolder<T> {
     final StackTraceElement[] es;
 
     LazyHolder(
-            UnaryOperator<TimeoutParamBuilder> params
+            UnaryOperator<TimeoutParamBuilder> spinner
     ) {
         if (debug) {
             es = Thread.currentThread().getStackTrace();
         } else es = null;
 
-        this.params = params.apply(new TimeoutParamBuilder()).build();
+        if (Lambdas.Identities.isIdentity(spinner)) {
+            this.spinner = new TimeoutParamBuilder().build();
+        } else {
+            if (def.parkedSpans == 0) throw new IllegalStateException();
+            final TimeoutParamBuilder tpb;
+            if (spinnerGlobalConfig.isUnbridled) {
+                tpb = new TimeoutParamBuilder(def);
+            } else {
+                tpb = new TimeoutParamBuilder(spinnerGlobalConfig);
+                tpb.isUnbridled = false;
+            }
+            this.spinner = spinner.apply(tpb).build();
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -290,7 +482,7 @@ public class LazyHolder<T> {
         /**
          * Called once, while this reference is being {@link #CREATED}
          * */
-        protected void onAssigned(T value) {}
+        protected void onCreated(T value) {}
 
         /**
          * Main {@link Supplier} constructor
@@ -316,13 +508,13 @@ public class LazyHolder<T> {
             if ((prev = ref) == NULL) {
                 if (VALUE.compareAndSet(this, getNull(), getCreating())) {
                     T res = builder.get();
-                    onAssigned(res);
+                    onCreated(res);
                     ref = new Versioned<>(CREATED, res);
                     return res;
                 }
                 while ((prev = ref).version() < CREATED) {}
             } else if (prev.version() < CREATED) {
-                prev = params.timeOutSpin();
+                prev = spinner.spin();
             }
             return prev.value();
         }
@@ -408,7 +600,7 @@ public class LazyHolder<T> {
         private final java.util.function.Function<S, T> builder;
 
         /**
-         * @see #global_timeoutMillis
+         * @see SpinnerGlobalConfig#global_timeoutMillis
          * */
         public Function(
                 UnaryOperator<TimeoutParamBuilder> params
@@ -432,7 +624,7 @@ public class LazyHolder<T> {
                 }
                 while ((prev = ref).version() < CREATED) {}
             } else if (prev.version() < CREATED) {
-                prev = params.timeOutSpin();
+                prev = spinner.spin();
             }
             return prev.value();
         }
@@ -684,18 +876,46 @@ public class LazyHolder<T> {
         }
     }
 
+    static String toStateString(int state) {
+        switch (state) {
+            case NULL_PHASE -> {
+                return "NULL";
+            }
+            case CREATING_PHASE -> {
+                return  "CREATING";
+            }
+            default -> {
+                return  "CREATED";
+            }
+        }
+    }
+
     @Override
     public String toString() {
+        String hash = Integer.toString(hashCode());
+        Versioned<T> current = ref;
+        return "LazyHolder@".concat(hash).concat("{"
+                + "\n >>> status=[" + toStateString(current.version()) + "]"
+                + ",\n >>> ref=\n" + current.toString().concat(",").indent(3)
+                + spinner.toString().indent(1)
+                + " }@").concat(hash);
+    }
+
+    public String toStringDetailed() {
+        String hash = Integer.toString(hashCode());
+        Versioned<T> current = ref;
         return es != null ?
-                "com.skylarkarms.concurrents.LazyHolder{" +
-                        "\n >>> ref=" + ref +
-                        ",\n >>> TimeoutParams=" + params +
-                        ",\n >>> at=" + Exceptionals.formatStack(0, es) +
-                        "\n }"
+                "LazyHolder@".concat(hash).concat("{" +
+                        "\n >>> status=[" + toStateString(current.version()) + "]" +
+                        ",\n >>> ref=\n" + current.toStringDetailed().concat(",").indent(3)
+                        + spinner.toString().concat(",").indent(1) +
+                        " >>> provenance=" + Exceptionals.formatStack(0, es).indent(3) +
+                        "}@").concat(hash)
                 :
-                "com.skylarkarms.concurrents.LazyHolder{" +
-                        "\n >>> ref=" + ref +
-                        ",\n >>> TimeoutParams=" + params +
-                        "\n }";
+                "LazyHolder@".concat(hash).concat("{" +
+                        "\n >>> status=[" + toStateString(current.version()) + "]" +
+                        ",\n >>> ref=\n" + current.toStringDetailed().concat(",").indent(3)
+                        + spinner.toString().indent(1) +
+                        "}@").concat(hash);
     }
 }

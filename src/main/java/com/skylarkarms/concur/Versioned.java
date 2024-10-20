@@ -62,17 +62,27 @@ public record Versioned<T>(
      * */
     public Versioned<T> newValue(T t) { return new Versioned<>(version + 1, t); }
 
+    String valueToString() {
+        T val;
+        return (val = value) == null ?
+                "null" :
+                val.toString();
+    }
+
     @Override
     public String toString() {
-        return isDefault() ? "DEFAULT VERSIONED=" + version :
-                "com.skylarkarms.concurrents.Versioned{" +
-                "\n value = " + value +
-                "\n}com.skylarkarms.concurrents.Versioned@" + hashCode();
+        String hash = Integer.toString(hashCode());
+        return isDefault() ? "[DEFAULT VERSIONED]=" + version :
+                "Versioned@".concat(hash).concat("{" +
+                "\n >>> value=\n" + valueToString().indent(3) +
+                "}Versioned@").concat(hash);
     }
     public String toStringDetailed() {
-        return isDefault() ? "DEFAULT VERSIONED=" + version : "com.skylarkarms.concurrents.Versioned{" +
-                "\n dataVersion=" + version +
-                ",\n value=" + value +
-                "\n}com.skylarkarms.concurrents.Versioned@" + hashCode();
+        String hash = Integer.toString(hashCode());
+        return isDefault() ? "[DEFAULT VERSIONED]=" + version :
+                "Versioned@".concat(hash).concat("{" +
+                "\n >>> dataVersion=" + version +
+                ",\n >>> value=\n" + valueToString().indent(3) +
+                "}Versioned@").concat(hash);
     }
 }

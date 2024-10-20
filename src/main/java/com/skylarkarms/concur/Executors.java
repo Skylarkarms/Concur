@@ -4,8 +4,10 @@ import com.skylarkarms.lambdas.Consumers;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
+import java.time.Duration;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 
@@ -97,28 +99,42 @@ public final class Executors {
     }
 
     /**
-     * @return a {@link ExecutorDelayer.ContentiousExecutor}.
+     * @return a {@link BaseExecutor.ContentiousExecutor}.
      * */
-    public static ExecutorDelayer.ContentiousExecutor getContentious(Executor executor) {
-        return new ExecutorDelayer.ContentiousExecutor(executor);
+    public static BaseExecutor.ContentiousExecutor getContentious(Executor executor) {
+        return new BaseExecutor.ContentiousExecutor(executor);
     }
 
-    public static ExecutorDelayer.Delayer getDelayer(Executor executor, TimeUnit unit, long duration) {
-        return new ExecutorDelayer.Delayer(executor, unit, duration);
+    public static BaseExecutor.Delayer getDelayer(Executor executor, TimeUnit unit, long duration) {
+        return new BaseExecutor.Delayer(executor, unit, duration);
     }
 
     /**
-     * Delivers a {@link ExecutorDelayer.Delayer} with a single Thread pool,
+     * Delivers a {@link BaseExecutor.Delayer} with a single Thread pool,
      * <p> with {@link ThreadFactory} defined at {@link java.util.concurrent.Executors#defaultThreadFactory()}
      * */
-    public static ExecutorDelayer.Delayer getSingleExecDelayer(TimeUnit unit, long duration) {
-        return new ExecutorDelayer.Delayer(
+    public static BaseExecutor.Delayer getSingleExecDelayer(TimeUnit unit, long duration) {
+        return new BaseExecutor.Delayer(
                 java.util.concurrent.Executors.newSingleThreadExecutor()
                 , unit, duration);
     }
 
-    public static abstract class ExecutorDelayer extends BaseExecutor {
-        protected ExecutorDelayer(Executor executor) { super(executor); }
+    public static abstract class BaseExecutor
+        implements Executor
+    {
+        final Executor executor;
+
+        protected BaseExecutor(Executor executor) {
+            this.executor = executor;
+            assert executor != null : "Executor shouldn't be null.";
+        }
+
+        @Override
+        public String toString() {
+            return ">>> BaseExecutor{" +
+                    "\n" + executor.toString().indent(3) +
+                    '}';
+        }
 
         /**
          * @return true on a success execute.
@@ -126,9 +142,9 @@ public final class Executors {
         public abstract boolean onExecute(Runnable command);
 
         @Override
-        public final void execute(Runnable command) { onExecute(command); }
-
-        final void sysOnExecute(Runnable command) { super.execute(command); }
+        public final void execute(Runnable command) {
+            onExecute(command);
+        }
 
         public boolean interrupt() {
             throw new IllegalStateException("Implemented when a duration longer than 0 is specified.");
@@ -136,7 +152,7 @@ public final class Executors {
 
         public boolean isDelayer() { return false; }
 
-        public static ExecutorDelayer getExecutorDelayer(Executor executor, TimeUnit unit, long duration) {
+        public static BaseExecutor getExecutorDelayer(Executor executor, TimeUnit unit, long duration) {
             if (duration > 0) return new Delayer(executor, unit, duration);
             else return new ContentiousExecutor(executor);
         }
@@ -161,7 +177,7 @@ public final class Executors {
          * <p> the waiting time of the previous command.
          * */
         public static class Delayer
-                extends ExecutorDelayer
+                extends BaseExecutor
         {
             final long nanoTime;
             volatile Leader leader;
@@ -226,9 +242,9 @@ public final class Executors {
                 }
             };
 
-            Delayer(Executor executor, TimeUnit unit, long duration) { this(executor, unit.toNanos(duration)); }
+            public Delayer(Executor executor, TimeUnit unit, long duration) { this(executor, unit.toNanos(duration)); }
 
-            Delayer(Executor executor, long nanoTime) {
+            public Delayer(Executor executor, long nanoTime) {
                 super(executor);
                 this.nanoTime = nanoTime;
                 if (nanoTime == 0) throw new IllegalStateException("Time cannot be 0");
@@ -250,7 +266,7 @@ public final class Executors {
                         open = 0,
                         interrupted = 1,
                         waiting = 2;
-                final String valueOf(int val) {
+                String valueOf(int val) {
                     return switch (val) {
                         case open -> "open";
                         case interrupted -> "interrupted";
@@ -275,7 +291,7 @@ public final class Executors {
                 /**
                  * @return true if properly closed, false if interrupted
                  * */
-                final boolean normalPass() {
+                boolean normalPass() {
                     if (interrupted == (int) STATE.getAndSet(this, waiting)) {
                         LockSupport.parkNanos(nanoTime);
                     }
@@ -289,7 +305,7 @@ public final class Executors {
                  * a new process may start while the same Thread is still processing.
                  * So there may be 2 instances of the same Thread simultaneously.
                  * */
-                final boolean firstPass() {
+                boolean firstPass() {
                     if (interrupted == (int) STATE.getAndSet(this, waiting)) {
                         LockSupport.parkNanos(nanoTime);
                     }
@@ -304,7 +320,7 @@ public final class Executors {
                     }
                     return res == waiting;
                 }
-                final boolean unpark() {
+                boolean unpark() {
                     if (
                             STATE.compareAndSet(this, waiting, interrupted)
                     ) {
@@ -314,7 +330,7 @@ public final class Executors {
                     return false;
                 }
 
-                final void sysUnpark() {
+                void sysUnpark() {
                     if (
                             STATE.compareAndSet(this, waiting, interrupted)
                     ) {
@@ -325,9 +341,10 @@ public final class Executors {
 
                 @Override
                 public String toString() {
-                    return "Leader{" +
-                            "lead=" + lead +
-                            "\n, state=" + valueOf((int)STATE.getOpaque(this));
+                    return "Leader{"
+                            + "\n >>> leading Thread=" + lead
+                            + ",\n >>> state=" + valueOf((int)STATE.getOpaque(this))
+                            + "\n}";
                 }
             }
 
@@ -341,7 +358,7 @@ public final class Executors {
                     }
                     return false;
                 } else {
-                    super.sysOnExecute(valet);
+                    executor.execute(valet);
                     return true;
                 }
             }
@@ -377,6 +394,21 @@ public final class Executors {
                         }
                 );
             }
+
+            @Override
+            public String toString() {
+                String hash = Integer.toString(hashCode());
+                return "Delayer@".concat(hash).concat("{" +
+                        "\n >>> nanoTime=" + nanoTime +
+                        "\n    - (millis)=" + Duration.ofNanos(nanoTime).toMillis() +
+                        ",\n >>> leader=\n" +
+                        (leader == null ? "   [null leader],\n" :
+                        leader.toString().concat(",").indent(3)) +
+                        " >>> command=" + command +
+                        ",\n >>> valet (Runnable) =" + valet
+                        + "\n" + super.toString().indent(1) +
+                        "}@").concat(hash);
+            }
         }
 
         /**
@@ -388,11 +420,11 @@ public final class Executors {
          * <p> then a new execution needs to be performed.
          * */
         public static class ContentiousExecutor
-                extends ExecutorDelayer {
+                extends BaseExecutor {
             private final AtomicBoolean isActive = new AtomicBoolean();
             private volatile Runnable commandRef;
             private static final VarHandle COMMAND_REF;
-            private final Runnable executor = () -> {
+            private final Runnable executable = () -> {
                 Runnable r = commandRef;
                 while (isActive.get()) {
                     r.run();
@@ -409,7 +441,7 @@ public final class Executors {
                     throw new ExceptionInInitializerError(e);
                 }
             }
-            ContentiousExecutor(Executor executor) { super(executor); }
+            public ContentiousExecutor(Executor executable) { super(executable); }
             /**
              * @return true, if this command triggers <p>
              * the creation of a new thread.
@@ -418,12 +450,23 @@ public final class Executors {
             public boolean onExecute(Runnable command) {
                 commandRef = command;
                 if (isActive.compareAndSet(false, true)) {
-                    super.sysOnExecute(executor);
+                    executor.execute(executable);
                     return true;
                 }
                 //Here a command may be lost... so we retry setting it to true.
                 // If succeeded, the inner do while will catch up on it.
                 return false;
+            }
+
+            @Override
+            public String toString() {
+                String hash = Integer.toString(hashCode());
+                return "ContentiousExecutor@".concat(hash).concat("{" +
+                        "\n >>>isActive=" + isActive.getOpaque() +
+                        ",\n >>> commandRef (mutable)=" + commandRef +
+                        ",\n >>> (main) executable=" + executable +
+                        "\n" + super.toString().indent(1) +
+                        "}@").concat(hash);
             }
         }
     }
@@ -463,128 +506,86 @@ public final class Executors {
         }
     }
 
-    static abstract class BaseExecutor implements Executor {
+    /**returning a true will retry, a false will attempt to end*/
+    public static class ScopedExecutor
+    {
         private final Executor executor;
 
-        protected BaseExecutor(Executor executor) {
-            this.executor = executor;
-            assert executor != null : "Executor shouldn't be null.";
-        }
-
-        @Override
-        public void execute(Runnable command) { executor.execute(command); }
-    }
-    @FunctionalInterface
-    public interface RetryExecutor {
-        /**@return true will retry, a false will attempt to end*/
-        boolean execute();
-
-        static RetryExecutor get(
-                Executor executor,
-                BooleanSupplier action
-        ) {
-            return new RetryExecutorImpl(executor, action);
-        }
-    }
-
-    /**returning a true will retry, a false will attempt to end*/
-    static class RetryExecutorImpl extends BaseExecutor implements RetryExecutor {
         private final Runnable sysAction;
 
-        /*volatile */VersionedObject gate = VersionedObject.OPEN;
-        private static final VarHandle GATE;
+        AtomicInteger ticket = new AtomicInteger();
+
+        volatile Exec execution = Exec.first;
+        private static final VarHandle EXEC;
+        record Exec(int ticket, boolean finished){
+            static Exec first = new Exec(0, true);
+        }
+
         static {
             try {
-                GATE = MethodHandles.lookup().findVarHandle(RetryExecutorImpl.class, "gate", VersionedObject.class);
+                EXEC = MethodHandles.lookup().findVarHandle(ScopedExecutor.class, "execution", Exec.class);
             } catch (ReflectiveOperationException e) {
                 throw new ExceptionInInitializerError(e);
             }
         }
 
-        @Override
-        public String toString() {
-            return "RetryExecutorImplTEST{" +
-                    "\n gate=" + gate +
-                    "\n sysAction=" + sysAction +
-                    "\n }@" + hashCode();
-        }
-
-        protected RetryExecutorImpl(
+        public ScopedExecutor(
                 Executor executor,
                 BooleanSupplier action
         ) {
-            super(executor);
+            this.executor = executor;
             sysAction = () -> {
-                VersionedObject prev;
-                do {
-                    prev = gate;
-                } while (
-                        action.getAsBoolean() //retry
-                                ||
-                                !tryOpen(prev) //tryOpen misses because
-                    // a next between action
-                );
 
+                int curr = ticket.getOpaque();
+
+                Exec prev;
+                while (curr > (prev = execution).ticket) {
+
+                    if (action.getAsBoolean()) {
+                        if (curr == (curr = ticket.getOpaque())) {
+                            Exec newE = new Exec(curr, true);
+                            if (curr == (curr = ticket.getOpaque())) {
+                                if (EXEC.compareAndSet(this, prev, newE)) break;
+                            }
+                        }
+                    } else {
+                        curr = ticket.getOpaque();
+                    }
+                }
             };
         }
 
-        boolean compareAndSet(VersionedObject expectedValue, VersionedObject newValue) {
-            return GATE.compareAndSet(this, expectedValue, newValue);
-        }
+        public boolean execute() {
+            int newT = ticket.incrementAndGet();
 
-        boolean tryOpen(VersionedObject prev) { return compareAndSet(prev, VersionedObject.OPEN); }
+            Exec prev, next, wit = null;
 
-        boolean tryClose(VersionedObject prev) {
-            return compareAndSet(prev, VersionedObject.CLOSE);
-        }
-
-        record VersionedObject(int version) {
-            private static final VersionedObject
-                    CLOSE = new VersionedObject(0),
-                    OPEN = new VersionedObject(1);
-
-            public VersionedObject next() { return new VersionedObject(version + 1); }
-
-            @Override
-            public String toString() {
-                String open = this == OPEN ? "OPEN" : this == CLOSE ? "CLOSE" : "";
-                return "VersionedObject{" +
-                        "\n dataVersion=" + version +
-                        "}" + open;
+            while (
+                    newT > (prev = execution).ticket
+                            &&
+                            newT == ticket.getOpaque()
+            ) {
+                next = new Exec(prev.ticket, false);
+                if (prev.finished && prev == (wit = (Exec) EXEC.compareAndExchange(this, prev, next))) {
+                    executor.execute(sysAction);
+                    return true;
+                } else if (
+                        wit != null
+                                &&
+                                wit.ticket > newT
+                ) return false;
             }
+            return false;
         }
 
         @Override
-        public boolean execute() {
-            VersionedObject prev = gate, next;
-
-            if (prev == VersionedObject.OPEN && tryClose(prev)) {
-                try {
-                    execute(
-                            sysAction
-                    );
-                } catch (Exception | Error e) {
-                    throw new RuntimeException(e);
-                }
-                return true;
-            } else {
-                boolean failedCauseOpened = false;
-                next = prev.next();
-                while (
-                        !compareAndSet(prev, next) //If cas fails retry
-                                &&
-                                !(failedCauseOpened = (prev = (VersionedObject) GATE.getOpaque(this)) == VersionedObject.OPEN)) //NOT by close
-                { //contentious auto-incrementation
-                    next = prev.next(); //retry increment
-                }
-                if (failedCauseOpened && (tryClose(prev))) { //If failed cause opened, and is the first
-                    // to CLOSE again, then execute.
-                    execute(
-                            sysAction
-                    );
-                }
-                return false;
-            }
+        public String toString() {
+            String hash = Integer.toString(hashCode());
+            return "ScopedExecutor@".concat(hash).concat("{" +
+                    "\n >>> sysAction=" + sysAction +
+                    ",\n >>> execution=\n" + execution.toString().concat(",").indent(3) +
+                    " >>> executor=\n" + executor.toString().indent(3) +
+                    "}@").concat(hash);
         }
     }
 }
