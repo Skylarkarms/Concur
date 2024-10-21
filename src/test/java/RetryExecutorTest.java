@@ -47,13 +47,19 @@ public class RetryExecutorTest {
         LockSupport.parkNanos(Duration.ofSeconds(5).toNanos());
 
         LazyHolder.debug = true;
-        LazyHolder.spinnerGlobalConfig.setUnbridled();
+        LazyHolder.setGlobalConfig(LazyHolder.SpinnerConfig.custom(
+                params -> {
+                    params.amplify(1.5);
+                }
+        ));
 
         record TAG(double i, String name, String tag){}
         LazyHolder.Supplier<TAG> integerSupplier = new LazyHolder.Supplier<>(
-                params -> params.broaden(3),
+                params -> params.amplify(3),
                 () -> new TAG(Math.pow(5, 6), "Juan", "LOL")
         );
+
+
         System.out.println(integerSupplier);
         TAG tag = integerSupplier.get();
         System.out.println(tag);
