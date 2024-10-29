@@ -111,7 +111,7 @@ public class LazyHolder<T> {
         }
 
         /**
-         * @return a {@link SpinnerConfig} instance with the predefined values to define a {@link LazyHolder.TimeoutSpinner}:
+         * This is a {@link SpinnerConfig} instance with the predefined values to define a {@link LazyHolder.TimeoutSpinner}:
          * <ul>
          *     <li>
          *         {@link #default_timeoutMillis}
@@ -582,8 +582,8 @@ public class LazyHolder<T> {
             }
 
             record ValState(int val, int state){
-                static ValState NULL = new ValState(-1, NULL_PHASE);
-                static ValState CREATING = new ValState(-1, CREATING_PHASE);
+                static final ValState NULL = new ValState(-1, NULL_PHASE);
+                static final ValState CREATING = new ValState(-1, CREATING_PHASE);
             }
 
             @SuppressWarnings("StatementWithEmptyBody")

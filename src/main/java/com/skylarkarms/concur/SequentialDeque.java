@@ -14,7 +14,7 @@ import java.util.function.Function;
 /**
  * This class allows the concurrent enqueuing of tasks while ensuring a sequential flushing mechanism.
  * Once a flushing has begun it cannot be stopped.
- * Subsequent enques that happen WHILE a flushing has began, will enqueue the task to the last postion in the Queue,
+ * Subsequent enqueues that happen WHILE a flushing has begun, will enqueue the task to the last position in the Queue,
  * If NO flushing is currently being performed, methods such as {@link #pushAndFlush(Runnable)} OR {@link Async#pushAndFlush(Async.CommandFunction)}
  * will trigger a new flush on the Thread specified in the constructor... OR on the same Thread executing the push if no specification is set.
  * All enqueued Commands (Commands which have been pushed via {@link Async#push(Async.CommandFunction)} OR {@link #push(Runnable)})
@@ -22,7 +22,7 @@ import java.util.function.Function;
  * will execute all enqueued tasks in the Thread in which the flushing {@link #beginFlush()} has being called, OR IF a flushing has
  * been triggered by {@link Async#pushAndFlush(Async.CommandFunction)} OR {@link #pushAndFlush(Runnable)}.
  * {@link Async.CommandFunction} is a special command which is meant to be used for executions which will happen non-sequentially.
- * Either it be because of an asyncrhonous callback or a delayed execution.
+ * Either it is because of an asynchronous callback or a delayed execution.
  * To continue the flushing this delayed commands MUST execute {@link Async.Nextable#next()} to continue executing enqueued commands.
  * {@link Async.Nextable#next()} will suspend the Thread until EVERY command in the Dequeue has been processed, and return a {@code true}
  * if there was at least ONE process enqueued, or {@code false} if it was the last.
@@ -64,13 +64,13 @@ public class SequentialDeque {
     boolean sysFlush() {
         Runnable last;
         while ((last = commands.pollLast()) != null) {
-            proccess(last);
+            process(last);
         }
         iterativeFlush();
         return true;
     }
 
-    private void proccess(Runnable last) {
+    private void process(Runnable last) {
         size.decrementAndGet();
         last.run();
     }
@@ -78,7 +78,7 @@ public class SequentialDeque {
     /**
      * @return false if the Runnable missed the flush.
      *         true if a flush has not being triggered
-     *         yet, OR the Runnable did NOT missed the flush.
+     *         yet, OR the Runnable did NOT miss the flush.
      * */
     public boolean push(Runnable seq) {
         size.incrementAndGet();
@@ -93,7 +93,7 @@ public class SequentialDeque {
     }
 
     /**
-     * @return true, if this method succesfully triggers a flush..
+     * @return true, if this method successfully triggers a flush...
      * */
     public boolean pushAndFlush(Runnable seq) {
         size.incrementAndGet();
@@ -110,7 +110,7 @@ public class SequentialDeque {
         if (notEmpty) {
             Runnable last;
             while ((last = commands.pollLast()) != null) {
-                proccess(last);
+                process(last);
             }
             iterativeFlush();
         }

@@ -13,7 +13,7 @@ import java.util.function.BooleanSupplier;
 
 public final class Executors {
 
-    private static final String handler_tag = "Skylarkarms.Concurrents.Executor.AUTO_EXIT_HANDLER";
+    private static final String handler_tag = "concurrents.Executor.AUTO_EXIT_HANDLER";
     public static Thread.UncaughtExceptionHandler AUTO_EXIT_HANDLER(Consumers.OfString printer) {
         return printer != null ?
                 new Thread.UncaughtExceptionHandler() {
@@ -26,7 +26,8 @@ public final class Executors {
                     }
 
                     @Override
-                    public String toString() { return handler_tag; }
+                    public String toString() { return handler_tag;
+                    }
                 } :
                 new Thread.UncaughtExceptionHandler() {
                     @Override
@@ -37,7 +38,9 @@ public final class Executors {
                     }
 
                     @Override
-                    public String toString() { return handler_tag; }
+                    public String toString() { return handler_tag
+                            .concat("@").concat(Integer.toString(hashCode()));
+                    }
                 };
     }
 
@@ -48,30 +51,55 @@ public final class Executors {
     }
 
     private static final String
-            max_hand_tag = "Skylarkarms.Concurrents.com.skylarkarms.concurrents.Executors.ThreadFactory#MAX_PRIOR. " +
-            "\n [handler =";
+            max_hand_tag = "skylarkarms.concurrents.Executors.ThreadFactory#MAX_PRIOR"
+            ;
     public static ThreadFactory factory(int priority, Thread.UncaughtExceptionHandler handler) {
         return new ThreadFactory() {
             @Override
             public Thread newThread(Runnable runnable) {
-                Thread t = new Thread(runnable, max_hand_tag);
+                Thread t = new Thread(runnable, max_hand_tag) {
+                    @Override
+                    public String toString() {
+                        return super.toString().concat("@").concat(Integer.toString(hashCode()));
+                    }
+                };
                 t.setPriority(priority);
                 t.setUncaughtExceptionHandler(handler);
                 return t;
             }
 
             @Override
-            public String toString() { return max_hand_tag.concat(handler.toString()).concat("]"); }
+            public String toString() {
+                return max_hand_tag +
+                        ",\n Handler = " + handler.toString().concat(",").indent(3)
+                        + "\n }";
+            }
         };
     }
 
-    public static ThreadFactory MAX_PRIOR() {return MAX_PRIOR.ref;}
+    public static ThreadFactory factory() {return NORM_PRIOR.ref;}
+    public static ThreadFactory factory(int priority) {
+        return switch (priority) {
+            case Thread.NORM_PRIORITY -> NORM_PRIOR.ref;
+            case Thread.MAX_PRIORITY -> MAX_PRIOR.ref;
+            case Thread.MIN_PRIORITY -> MIN_PRIOR.ref;
+            default -> factory(priority, auto_exit_handler());
+        };
+    }
     private record MAX_PRIOR() {static final ThreadFactory ref
             = factory(Thread.MAX_PRIORITY, auto_exit_handler.ref);
     }
 
+    private record NORM_PRIOR() {static final ThreadFactory ref
+            = factory(Thread.NORM_PRIORITY, auto_exit_handler.ref);
+    }
+
+    private record MIN_PRIOR() {static final ThreadFactory ref
+            = factory(Thread.MIN_PRIORITY, auto_exit_handler.ref);
+    }
+
     private static final String
-            executor_tag = "Skylarkarms.Concurrents.com.skylarkarms.concurrents.Executors.Executor#UNBRIDLED."
+            executor_tag = "skylarkarms.concurrents.Executors.Executor#UNBRIDLED."
             + "\n [ThreadFactory = ";
     public static Executor UNBRIDLED(
             ThreadFactory factory
@@ -90,12 +118,30 @@ public final class Executors {
 
     /**
      * A limitless/pool-less Executor that delivers unbridled {@link Thread}'s
-     * from {@link MAX_PRIOR#ref} factory
+     * from {@link UNBRIDLED_NORM#ref} factory
      * with an {@link Executors#auto_exit_handler} exception handler
      * */
-    public static Executor UNBRIDLED() {return UNBRIDLED.ref;}
-    private record UNBRIDLED() {
+    public static Executor UNBRIDLED() {return UNBRIDLED_NORM.ref;}
+
+    public static Executor UNBRIDLED(int priority) {
+        return switch (priority) {
+            case Thread.MAX_PRIORITY -> UNBRIDLED_MAX.ref;
+            case Thread.NORM_PRIORITY -> UNBRIDLED_NORM.ref;
+            case Thread.MIN_PRIORITY -> UNBRIDLED_MIN.ref;
+            default -> UNBRIDLED(factory(priority, auto_exit_handler()));
+        };
+    }
+
+    private record UNBRIDLED_MAX() {
         static final Executor ref = UNBRIDLED(MAX_PRIOR.ref);
+    }
+
+    private record UNBRIDLED_NORM() {
+        static final Executor ref = UNBRIDLED(NORM_PRIOR.ref);
+    }
+
+    private record UNBRIDLED_MIN() {
+        static final Executor ref = UNBRIDLED(MIN_PRIOR.ref);
     }
 
     /**
@@ -142,9 +188,7 @@ public final class Executors {
         public abstract boolean onExecute(Runnable command);
 
         @Override
-        public final void execute(Runnable command) {
-            onExecute(command);
-        }
+        public final void execute(Runnable command) { onExecute(command);  }
 
         public boolean interrupt() {
             throw new IllegalStateException("Implemented when a duration longer than 0 is specified.");
@@ -377,7 +421,7 @@ public final class Executors {
                     long duration, TimeUnit unit, Runnable runnable) {
                 executor.execute(
                         () -> {
-                            LockSupport.parkNanos(unit.toNanos(duration));
+                            Locks.robustPark(unit, duration);
                             runnable.run();
                         }
                 );
@@ -387,9 +431,9 @@ public final class Executors {
              * */
             public static void oneShot(
                     long duration, TimeUnit unit, Runnable runnable) {
-                UNBRIDLED.ref.execute(
+                UNBRIDLED_NORM.ref.execute(
                         () -> {
-                            LockSupport.parkNanos(unit.toNanos(duration));
+                            Locks.robustPark(unit, duration);
                             runnable.run();
                         }
                 );
@@ -504,21 +548,63 @@ public final class Executors {
             this(
                     corePoolSize, preestartCores, maxPoolSize, keepAliveTime, unit, new LinkedBlockingQueue<>(), factory);
         }
+        public ThrowableExecutor(
+                int nThreads) {
+            this(
+                    nThreads, false,
+                    nThreads,
+                    0L, TimeUnit.MILLISECONDS,
+                    new LinkedBlockingQueue<>(), factory());
+        }
     }
 
-    /**returning a true will retry, a false will attempt to end*/
+    /**
+     * This {@link BooleanSupplier} action is designed for preemptively escaping a process (backpressure drop).
+     * The most common type of confirmation is the double-checking strategy done by
+     * opaque-like or volatile-like loads from/to memory.
+     *
+     * <p> A double check result can either return:
+     * <ul>
+     *     <li>
+     *         {@code `true`} Execution escapes. Ths is the faster option,
+     *         but more memory expensive as it ends Thread utilization prematurely.
+     *     </li>
+     *     <li>
+     *         {@code `false`} Execution retries. This option will try to reuse the Thread once again.
+     *         <p> {@code `true`} should be the de-facto choice of returning on the very last line of the {@link BooleanSupplier} action, this allows us to simplify the code on the {@link #execute()} side
+     *         <p> since it does not need to spin-wait for potential missing calls.
+     *     </li>
+     * </ul>
+     * <p> The class constructor will throw a {@link RuntimeException} if deadlocked on a {@code `false`} result
+     * */
     public static class ScopedExecutor
     {
         private final Executor executor;
 
         private final Runnable sysAction;
 
-        AtomicInteger ticket = new AtomicInteger();
+        private final AtomicInteger ticket = new AtomicInteger();
 
         volatile Exec execution = Exec.first;
         private static final VarHandle EXEC;
-        record Exec(int ticket, boolean finished){
-            static Exec first = new Exec(0, true);
+        public
+        static class Exec{
+            final int ticket; public final boolean finished;
+
+            static final Exec first = new Exec(0, true);
+
+            Exec(int ticket, boolean finished) {
+                this.ticket = ticket;
+                this.finished = finished;
+            }
+
+            @Override
+            public String toString() {
+                return "Exec{" +
+                        ("\n > ticket = " + ticket +
+                        ",\n > finished = " + finished).indent(3)
+                        + "}@" + hashCode();
+            }
         }
 
         static {
@@ -529,44 +615,75 @@ public final class Executors {
             }
         }
 
+        static final long
+                baseWaitingNanos = Duration.ofNanos(90).toNanos();
+
+        /**
+         * @see ScopedExecutor
+         * */
         public ScopedExecutor(
                 Executor executor,
                 BooleanSupplier action
         ) {
             this.executor = executor;
             sysAction = () -> {
-
                 int curr = ticket.getOpaque();
-
-                Exec prev;
-                while (curr > (prev = execution).ticket) {
-
-                    if (action.getAsBoolean()) {
-                        if (curr == (curr = ticket.getOpaque())) {
-                            Exec newE = new Exec(curr, true);
-                            if (curr == (curr = ticket.getOpaque())) {
-                                if (EXEC.compareAndSet(this, prev, newE)) break;
-                            }
-                        }
+                Object prev = EXEC.getOpaque(this);
+                ScopedExecutor.Exec newE;
+                int pass = 1;
+                long localWaitNanos = baseWaitingNanos;
+                while (true) {
+                    do {
+                            newE = new ScopedExecutor.Exec(curr, true);
+                    } while (
+                            curr != (curr = ticket.getOpaque())
+                            ||
+                            !action.getAsBoolean()
+                    );
+                    if (
+                            curr == ticket.getOpaque()
+                    ) {
+                        assert EXEC.compareAndSet(this, prev, newE);
+                        break;
                     } else {
-                        curr = ticket.getOpaque();
+                        pass++;
+                        if (pass < 21) {
+                            // short sleep and repeat....
+                            Locks.robustPark(
+                                    localWaitNanos
+                            );
+                            localWaitNanos *= 2;
+                            curr = ticket.getOpaque();
+                        } else {
+                            throw new RuntimeException("Process timed out while executing the  task."
+                                    + "\n t = " + baseWaitingNanos * (long)(Math.pow(2, pass) - 1) + " nanos"
+                                    + "\n The cause may be that the action [" + action + "] is stuck on a deadlock by always returning `false`."
+                            );
+                        }
                     }
                 }
             };
         }
 
+        public boolean isIdle() { return execution.finished; }
+
+        public boolean isBusy() { return !execution.finished; }
+
         public boolean execute() {
             int newT = ticket.incrementAndGet();
+            ScopedExecutor.Exec prev = (Exec) EXEC.getOpaque(this)
+                    , next, wit;
 
-            Exec prev, next, wit = null;
-
-            while (
-                    newT > (prev = execution).ticket
+            if (
+                    prev.finished
+                    &&
+                            newT > prev.ticket
                             &&
                             newT == ticket.getOpaque()
             ) {
-                next = new Exec(prev.ticket, false);
-                if (prev.finished && prev == (wit = (Exec) EXEC.compareAndExchange(this, prev, next))) {
+                next = new ScopedExecutor.Exec(prev.ticket, false);
+                if (
+                        prev == (wit = (ScopedExecutor.Exec) EXEC.compareAndExchange(this, prev, next))) {
                     executor.execute(sysAction);
                     return true;
                 } else if (
@@ -574,6 +691,7 @@ public final class Executors {
                                 &&
                                 wit.ticket > newT
                 ) return false;
+                else return false;
             }
             return false;
         }
@@ -583,6 +701,7 @@ public final class Executors {
             String hash = Integer.toString(hashCode());
             return "ScopedExecutor@".concat(hash).concat("{" +
                     "\n >>> sysAction=" + sysAction +
+                    ",\n >>> ticket=" + ticket.getOpaque() +
                     ",\n >>> execution=\n" + execution.toString().concat(",").indent(3) +
                     " >>> executor=\n" + executor.toString().indent(3) +
                     "}@").concat(hash);

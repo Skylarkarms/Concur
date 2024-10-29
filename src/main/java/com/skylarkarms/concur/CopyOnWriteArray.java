@@ -33,7 +33,7 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
     private static final VarHandle VALUE;
     private static final VarHandle SNAPSHOT;
 
-    public T[] takePlainSnpashot() {
+    public T[] takePlainSnapshot() {
         snapshot = localArr;
         return snapshot;
     }

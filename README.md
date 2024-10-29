@@ -1,5 +1,5 @@
 # Concur
-[latest version] = `1.0.5`
+[latest version] = `1.0.6`
 
 [dependencies] = [`io.github.skylarkarms:lambdas:1.0.3`](https://github.com/Skylarkarms/Lambdas)
 

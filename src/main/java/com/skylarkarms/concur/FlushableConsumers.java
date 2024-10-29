@@ -129,11 +129,11 @@ public final class FlushableConsumers<X> implements Consumer<X> {
      * The {@link #acquire(Consumer)} method will return the value if the current {@link T} 'value'
      * has satisfied the 'when' {@link Predicate} OR enqueue the {@link Consumer} if the test has not been satisfied.
      * When the test has returned {@code true} an assertion error may(depending on VM options) verify the consistency
-     * of the current state evaluation against the 'when' {@link Predicate} and throw if the state has been changed via side-effect.
+     * of the current state evaluation against the 'when' {@link Predicate} and throw if the state has been changed via side effect.
      * When the test returns {@code false} upon {@link #acquire(Consumer)} execution no assertion will be applied,
      * instead it will be directly pushed to a {@link Deque}, UNTIL a {@link #set(Object)}, {@link #accept(Object)} OR {@link #accepted(Object)}
      * re-evaluates the {@link Predicate} 'test' and triggers a {@link #flush()}
-     * If the value has been altered via side-effects, the method {@link #tryFlush()}
+     * If the value has been altered via side effects, the method {@link #tryFlush()}
      * will re-apply the 'when' valuation, and flush when it returns {@code true}.
      * */
     public static final class Acquire<T>
@@ -156,7 +156,7 @@ public final class FlushableConsumers<X> implements Consumer<X> {
                 "\n in a side-effect fashion, use 'tryFlush' instead.";
 
         /**
-         * Checks if the inner state has not had any side-effect
+         * Checks if the inner state has not had any side effect
          * actions performed on it's state before dispatch.
          * The dispatch will remove all enqueued {@link Consumer}s in a FIFO manner.
          * */
@@ -241,7 +241,7 @@ public final class FlushableConsumers<X> implements Consumer<X> {
         }
 
         record ValTest<T>(T val, boolean test) {
-            static ValTest<?> DEF = new ValTest<>(null, false);
+            static final ValTest<?> DEF = new ValTest<>(null, false);
             @SuppressWarnings("unchecked")
             static<S> ValTest<S> getDefault() { return (ValTest<S>) DEF; }
 
@@ -273,7 +273,7 @@ public final class FlushableConsumers<X> implements Consumer<X> {
         }
 
         /**
-         * Update the current state if the value's inner state has changed via side-effects
+         * Update the current state if the value's inner state has changed via side effects
          * */
         @SuppressWarnings("unchecked")
         public boolean updateState() {
