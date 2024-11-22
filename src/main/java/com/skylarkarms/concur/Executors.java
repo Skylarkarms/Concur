@@ -1,8 +1,5 @@
 package com.skylarkarms.concur;
 
-import com.skylarkarms.lambdas.Consumers;
-import com.skylarkarms.lambdas.Suppliers;
-
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.time.Duration;
@@ -12,11 +9,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 public final class Executors {
 
     private static final String handler_tag = "concurrents.Executor.AUTO_EXIT_HANDLER";
-    public static Thread.UncaughtExceptionHandler AUTO_EXIT_HANDLER(Consumers.OfString printer) {
+    public static Thread.UncaughtExceptionHandler AUTO_EXIT_HANDLER(Consumer<String> printer) {
         return printer != null ?
                 new Thread.UncaughtExceptionHandler() {
                     @Override
@@ -46,6 +44,17 @@ public final class Executors {
                 };
     }
 
+    /**
+     * @return An {@link java.lang.Thread.UncaughtExceptionHandler} instance of logic:
+     * <pre>{@code
+     *   public void uncaughtException(Thread t, Throwable e) {
+     *      e.printStackTrace(System.err);
+     *      t.interrupt();
+     *      System.exit(0);
+     *   }
+     * }</pre>
+
+     * */
     public static Thread.UncaughtExceptionHandler auto_exit_handler() {return auto_exit_handler.ref; }
     private record auto_exit_handler() {
         static final Thread.UncaughtExceptionHandler ref
@@ -138,6 +147,9 @@ public final class Executors {
             default -> sysFactory(priority, auto_exit_handler());
         };
     }
+    /**
+     * @return {@link ThreadFactory} instance with {@link #auto_exit_handler()} as {@link java.lang.Thread.UncaughtExceptionHandler}
+     * */
     public static ThreadFactory cleanFactory(int priority) {
         return cleanFactory(priority, auto_exit_handler());
     }
@@ -442,17 +454,26 @@ public final class Executors {
                     }
             );
         }
+
+        record ONE_SHOT() {
+            static final ThreadFactory ref = cleanFactory(Thread.NORM_PRIORITY);
+        }
+
         /**
-         * Uses {@link #UNBRIDLED} executor as default Executor
+         * Uses a {@link ThreadFactory} instance of characteristics:
+         * <ul>
+         *     <li>{@link Thread#getPriority()} = {@link Thread#NORM_PRIORITY}</li>
+         *     <li>{@link java.lang.Thread.UncaughtExceptionHandler} = {@link #auto_exit_handler()}</li>
+         * </ul>
          * */
         public static void oneShot(
                 long duration, TimeUnit unit, Runnable runnable) {
-            UNBRIDLED_NORM.ref.execute(
+            ONE_SHOT.ref.newThread(
                     () -> {
                         Locks.robustPark(duration, unit);
                         runnable.run();
                     }
-            );
+            ).start();
         }
 
         @Override
@@ -802,6 +823,14 @@ public final class Executors {
                 return new ScheduleParams(duration, 0, unit, 0);
             }
 
+            /**
+             * @return A ScheduledParams with the given configuration:
+             * <ul>
+             *     <li> {@link TimeUnit} = {@link TimeUnit#SECONDS} </li>
+             *     <li> {@link ScheduleParams#initital_delay} = 3 </li>
+             *     <li> {@link ScheduleParams#delay} = 2 </li>
+             * </ul>
+             * */
             public static final ScheduleParams periodic(int repetitions) {
                 return new ScheduleParams(3, 2, TimeUnit.SECONDS, repetitions);
             }
@@ -879,7 +908,7 @@ public final class Executors {
                                 }
                             } else return;
                             boolean broken = false;
-                            for (int i = 1; i < reps; i++) {
+                            for (int i = 0; i < reps; i++) {
                                 if (!(broken = !started.getOpaque())) {
                                     command.run();
                                     Boolean parked = valet.parkUnpark(nanos);
@@ -902,12 +931,24 @@ public final class Executors {
 
         public static<T> FixedScheduler generator(
                 ThreadFactory factory,
-                Suppliers<T> supplier,
-                Consumer<T> consumer,
-                ScheduleParams params
+                ScheduleParams params,
+                Supplier<T> supplier,
+                Consumer<T> consumer
         ) {
             return new FixedScheduler(
                     factory,
+                    params,
+                    () -> consumer.accept(supplier.get())
+            );
+        }
+
+        public static<T> FixedScheduler generator(
+                ScheduleParams params,
+                Supplier<T> supplier,
+                Consumer<T> consumer
+        ) {
+            return new FixedScheduler(
+                    cleanFactory(Thread.NORM_PRIORITY),
                     params,
                     () -> consumer.accept(supplier.get())
             );

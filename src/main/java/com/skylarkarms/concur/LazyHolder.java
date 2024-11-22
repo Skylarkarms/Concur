@@ -1,8 +1,5 @@
 package com.skylarkarms.concur;
 
-import com.skylarkarms.lambdas.Exceptionals;
-import com.skylarkarms.lambdas.Lambdas;
-
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.time.Duration;
@@ -311,9 +308,7 @@ public class LazyHolder<T> {
         }
 
         @Override
-        public String toString() {
-            return ">>> Spinner[unbridled]";
-        }
+        public String toString() { return ">>> Spinner[unbridled]"; }
     }
     /**
      * A partial busy-wait lock that will park the {@link Thread} upon reaching the
@@ -398,7 +393,7 @@ public class LazyHolder<T> {
                                         + "\n This Holder is waiting too much on this Supplier."
                                         + "\n One option is to broaden the values of the TimeoutSpinner of the problematic Holder"
                                         + "\n If this Exception keeps appearing, the cause may be a cyclic referencing"
-                                        + "\n at = " + Exceptionals.formatStack(0, es);
+                                        + "\n at = " + formatStack(es);
                         throw new RuntimeException(m);
                     } else {
                         LockSupport.parkNanos(waitingNanos);
@@ -448,7 +443,8 @@ public class LazyHolder<T> {
             es = Thread.currentThread().getStackTrace();
         } else es = null;
 
-        if (Lambdas.Consumers.isEmpty(spinner)) {
+        if (spinner == null) {
+//        if (Lambdas.Consumers.isEmpty(spinner)) {
             SpinnerConfig config = spinnerGlobalConfig;
             this.spinner = config.isUnbridled ? new Unbridled() : new TimeoutSpinner(config);
         } else {
@@ -537,9 +533,8 @@ public class LazyHolder<T> {
             if (builder == null) throw new IllegalStateException("'builder' Supplier cannot be null");
         }
 
-        public Supplier(java.util.function.Supplier<T> builder) {
-            this(Lambdas.Consumers.getDefaultEmpty(), builder);
-        }
+        public Supplier(java.util.function.Supplier<T> builder) { this((Consumer<TimeoutParamBuilder>) null, builder); }
+//        public Supplier(java.util.function.Supplier<T> builder) { this(Lambdas.Consumers.getDefaultEmpty(), builder); }
 
         @SuppressWarnings("StatementWithEmptyBody")
         @Override
@@ -612,7 +607,7 @@ public class LazyHolder<T> {
                                         :
                                         "TimeOutException:" +
                                                 "\n This Exception may occur because of cyclic referencing " +
-                                                "\n at = " + Exceptionals.formatStack(0, es);
+                                                "\n at = " + formatStack(es);
                                 throw new RuntimeException(m);
                             } else {
                                 tries = 0;
@@ -658,7 +653,8 @@ public class LazyHolder<T> {
             this.builder = builder;
         }
 
-        public Function(java.util.function.Function<S, T> builder) { this(Lambdas.Consumers.getDefaultEmpty(), builder); }
+        public Function(java.util.function.Function<S, T> builder) { this((Consumer<TimeoutParamBuilder>) null, builder); }
+//        public Function(java.util.function.Function<S, T> builder) { this(Lambdas.Consumers.getDefaultEmpty(), builder); }
 
         @SuppressWarnings("StatementWithEmptyBody")
         @Override
@@ -938,6 +934,18 @@ public class LazyHolder<T> {
         }
     }
 
+    private static final String formatStack(StackTraceElement[] es) throws AssertionError {
+        int le = es.length;
+        assert le > 0 : "`startAt` index [" + 0 + "] greater than or equal to StackTraceElement arrays length [" + le  +"].";
+        StringBuilder sb = new StringBuilder((le * 2) + 2);
+        sb.append("\n >> stack {");
+        for (int i = 0; i < le; i++) {
+            StackTraceElement e = es[i];
+            sb.append("\n   - at [").append(i).append("] ").append(e);
+        }
+        return sb.append("\n } << stack. [total length = ").append(le).append("]").toString();
+    }
+
     @Override
     public String toString() {
         String hash = Integer.toString(hashCode());
@@ -957,7 +965,7 @@ public class LazyHolder<T> {
                         "\n >>> status=[" + toStateString(current.version()) + "]" +
                         ",\n >>> ref=\n" + current.toStringDetailed().concat(",").indent(3)
                         + spinner.toString().concat(",").indent(1) +
-                        " >>> provenance=" + Exceptionals.formatStack(0, es).indent(3) +
+                        " >>> provenance=" + formatStack(es).indent(3) +
                         "}@").concat(hash)
                 :
                 "LazyHolder@".concat(hash).concat("{" +

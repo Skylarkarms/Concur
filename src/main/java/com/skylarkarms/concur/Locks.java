@@ -1,7 +1,5 @@
 package com.skylarkarms.concur;
 
-import com.skylarkarms.lambdas.Suppliers;
-
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.concurrent.TimeUnit;
@@ -496,7 +494,7 @@ public final class Locks<E extends Exception> {
     public static<E extends Exception> void waitIf(
             Supplier<E> exception,
             BooleanSupplier condition,
-            Suppliers.OfString cause
+            Supplier<String> cause
     ) throws E {
         waitIf(
                 exception,
@@ -510,7 +508,7 @@ public final class Locks<E extends Exception> {
             Supplier<E> exception,
             Config config,
             BooleanSupplier condition,
-            Suppliers.OfString cause
+            Supplier<String> cause
     ) throws E {
         if (!condition.getAsBoolean()) return;
         long totalTimeNanos = config.totalNanos;
@@ -565,7 +563,7 @@ public final class Locks<E extends Exception> {
             Config config,
             Supplier<T> supplier,
             Predicate<T> unless,
-            Suppliers.OfString cause
+            Supplier<String> cause
     ) throws E {
         T res;
         if (!unless.test(res = supplier.get())) return res;
@@ -619,7 +617,7 @@ public final class Locks<E extends Exception> {
     public static<E extends Exception> void waitIf(
             ExceptionConfig<E> config,
             BooleanSupplier condition,
-            Suppliers.OfString cause
+            Supplier<String> cause
     ) throws E {
         waitIf(
                 config.exception, config.config,
