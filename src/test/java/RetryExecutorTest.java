@@ -57,8 +57,8 @@ public class RetryExecutorTest {
 
         System.out.println("<<<<<<<<||||||>>>>>>>");
         Locks.robustPark(Duration.ofSeconds(5).toNanos());
-        Executors.BaseExecutor.Delayer delayer =
-                new Executors.BaseExecutor.Delayer(Executors.UNBRIDLED(), TimeUnit.SECONDS, 5);
+        Executors.Delayer delayer =
+                new Executors.Delayer(5, TimeUnit.SECONDS);
 
         long nano = System.nanoTime();
         delayer.execute(
@@ -74,8 +74,8 @@ public class RetryExecutorTest {
 
         System.err.println("<<<<<<<<||||||>>>>>>>");
         Locks.robustPark(Duration.ofSeconds(5).toNanos());
-        Executors.BaseExecutor.ContentiousExecutor cont =
-                new Executors.BaseExecutor.ContentiousExecutor(Executors.UNBRIDLED());
+        Executors.ContentiousExecutor cont =
+                new Executors.ContentiousExecutor(Executors.UNBRIDLED());
 
         System.out.println(cont);
 
@@ -107,7 +107,7 @@ public class RetryExecutorTest {
     ) {
         System.out.println("Loop begins...");
 
-        Locks.robustPark(TimeUnit.SECONDS, 3);
+        Locks.robustPark(3, TimeUnit.SECONDS);
         VarHandle.fullFence();
         Scope[] scopeArr = new Scope[1];
         final Scope scope;
@@ -236,7 +236,7 @@ public class RetryExecutorTest {
                 if (local == shared.opaqueDouble()) {
                     int secs = 1;
                     Chrono chrono = new Chrono();
-                    Executors.BaseExecutor.Delayer.oneShot(
+                    Executors.Delayer.oneShot(
                             secs, TimeUnit.SECONDS,
                             () -> {
                                 if (local == shared.getaDouble()) {

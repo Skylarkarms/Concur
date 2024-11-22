@@ -15,158 +15,126 @@ import java.util.function.Supplier;
 
 public final class Locks<E extends Exception> {
 
-    /**
-     * This performs better than boolean flag semaphores.
-     * Valet will `park` a Thread and then be considered "busy" by which stage it can either:
-     * <ul>
-     *     <li>{@link #unpark()} it</li>
-     *     <li>{@link #discharge()} it</li>
-     * </ul>
-     * {@link #discharge()} can be called BEFORE a call to park.
-     * <p> Calling {@link #unpark()} BEFORE a call to {@link #park()} will throw an {@link IllegalStateException}.
-     * */
     public static final class Valet {
-
-        private final Locks.ExceptionConfig<TimeoutException> exc;
+        volatile Thread parking;
+        private final AtomicBoolean isShutdown = new AtomicBoolean();
 
         public Valet() {
-            exc = ExceptionConfig.timeout();
         }
 
-        public Valet(Consumer<Config.Builder> builder) {
-            this.exc = ExceptionConfig.timeout(builder);
-        }
+        public boolean isShutdown() { return isShutdown.getOpaque(); }
 
-        volatile Thread t;
-
-        private static final VarHandle T;
-
+        public boolean isBusy() { return PARKING.getOpaque(this) != null; }
+        static final VarHandle PARKING;
         static {
             try {
-                T = MethodHandles.lookup().findVarHandle(Valet.class, "t", Thread.class);
+                PARKING = MethodHandles.lookup().findVarHandle(Valet.class, "parking", Thread.class);
             } catch (NoSuchFieldException | IllegalAccessException e) {
                 throw new ExceptionInInitializerError(e);
             }
         }
-
-        public boolean isBusy() { return T.getOpaque(this) != null; }
-
-        final BooleanSupplier waitIf = () -> T.getOpaque(this) != null;
-
-        public boolean park(
-                long duration
-                , TimeUnit unit
-                , Suppliers.OfString cause
-        ) throws TimeoutException {
-            if (wasLetGo.getOpaque()) return false;
-            if (T.compareAndSet(this, null, Thread.currentThread())) {
-                ExceptionConfig<TimeoutException> tc = exc.copyWith(duration, unit);
-                waitIf(
-                        tc,
-                        this.waitIf,
-                        cause
-                );
-                return true;
-            } else return false;
-        }
-
-        public boolean park(
-                long seconds, Suppliers.OfString cause
-        ) throws TimeoutException {
-            if (wasLetGo.getOpaque()) return false;
-            if (T.compareAndSet(this, null, Thread.currentThread())) {
-                ExceptionConfig<TimeoutException> tc = exc.copyWith(seconds, TimeUnit.SECONDS);
-                waitIf(
-                        tc,
-                        this.waitIf,
-                        cause
-                );
-                return true;
-            } else return false;
-        }
-
         /**
-         * @param cause: cause of a possible failure if the time (default 10 seconds) has expired.
-         * @return {@code `true`} if the code performed a park,
-         * <p> {@code `false`} if not.
-         * @throws TimeoutException if 10 seconds have passed without response.
+         * @see #parkUnpark(long)
          * */
-        public boolean park(Suppliers.OfString cause) throws TimeoutException {
-            if (wasLetGo.getOpaque()) return false;
-            if (T.compareAndSet(this, null, Thread.currentThread())) {
-                waitIf(
-                        exc,
-                        this.waitIf,
-                        cause
-                );
-                return true;
-            } else return false;
+        public final Boolean parkUnpark(long duration, TimeUnit unit) {
+            return parkUnpark(unit.toNanos(duration));
         }
-
         /**
-         * @return {@code `true`} if the code performed a park,
-         * <p> {@code `false`} if not.
-         * @throws TimeoutException if 10 seconds have passed without response.
+         * @return
+         * <ul>
+         *     <li>{@code `null`} if this class is {@code `busy`}</li>
+         *     <li>{@code `true`} if the park was successful</li>
+         *     <li>{@code `false`} if the park was interrupted OR was shutdown()</li>
+         * </ul>
          * */
-        public boolean park() throws TimeoutException {
-            if (wasLetGo.getOpaque()) return false;
-            if (T.compareAndSet(this, null, Thread.currentThread())) {
-                waitIf(
-                        exc,
-                        this.waitIf
-                );
-                return true;
-            } else return false;
-        }
-
-        public<E extends Exception> boolean park(ExceptionConfig<E> config) throws E {
-            if (wasLetGo.getOpaque()) return false;
-            if (T.compareAndSet(this, null, Thread.currentThread())) {
-                waitIf(
-                        config,
-                        this.waitIf
-                );
-                return true;
-            } else return false;
-        }
-
-        public boolean park(
-                Consumer<Config.Builder> builder,
-                Suppliers.OfString cause
-        ) throws TimeoutException {
-            if (wasLetGo.getOpaque()) return false;
+        public final Boolean parkUnpark(long nanos) {
+            if (isShutdown.getOpaque()) return false;
+            if (nanos < 1) return true;
             Thread curr = Thread.currentThread();
-            if (T.compareAndSet(this, null, curr)) {
-                ExceptionConfig<TimeoutException> unbr = exc.copyWith(builder);
-                waitIf(
-                        unbr,
-                        this.waitIf,
-                        cause
-                );
-                return true;
-            } else return false;
-        }
+            if (PARKING.compareAndSet(this, null, curr)) {
+                long currentNano = System.nanoTime();
+                final long end = currentNano + nanos;
+                while (currentNano < end) {
+                    if (curr == PARKING.getOpaque(this)) {
+                        if (!isShutdown.getOpaque()) {
+                            LockSupport.parkNanos(end - currentNano);
+                            if (curr == PARKING.getOpaque(this)) {
+                                currentNano = System.nanoTime();
+                            } else return false;
+                        } else {
+                            PARKING.compareAndSet(this, curr, null);
+                            return false;
+                        }
 
-        public void unpark() throws IllegalStateException {
-            Object t;
-            if ((t = T.getAndSet(this, null)) != null) {
-                LockSupport.unpark((Thread) t);
-            }
-            throw new IllegalStateException("No Thread has been parked yet.");
-        }
 
-        private final AtomicBoolean wasLetGo = new AtomicBoolean();
-
-        public void discharge() {
-            if (wasLetGo.compareAndSet(false, true)) {
-                Object t;
-                if ((t = T.getAndSet(this, null)) != null) {
-                    LockSupport.unpark((Thread) t);
+                    } else return false;
                 }
+                return !isShutdown.getOpaque() && PARKING.compareAndSet(this, curr, null);
             }
+            return null;
         }
-        public boolean recruit() {
-            return wasLetGo.compareAndSet(true, false);
+
+        public final Boolean parkShutdown(long duration, TimeUnit unit) {
+            return parkShutdown(unit.toNanos(duration));
+        }
+        public final Boolean parkShutdown(long nanos) {
+            if (isShutdown.getOpaque()) return false;
+            if (nanos < 1) return true;
+            Thread curr = Thread.currentThread();
+            if (PARKING.compareAndSet(this, null, curr)) {
+                long currentNano = System.nanoTime();
+                final long end = currentNano + nanos;
+                while (currentNano < end) {
+                    if (curr == PARKING.getOpaque(this)) {
+                        if (!isShutdown.getOpaque()) {
+                            LockSupport.parkNanos(end - currentNano);
+                            if (curr == PARKING.getOpaque(this)) {
+                                currentNano = System.nanoTime();
+
+                            } else return false;
+                        } else {
+                            PARKING.compareAndSet(this, curr, null);
+                            return false;
+                        }
+                    } else return false;
+                }
+                return isShutdown.compareAndSet(false, true) && PARKING.compareAndSet(this, curr, null);
+            }
+            return null;
+        }
+
+        /**
+         * @return {@code `null`} if this class was NOT {@code `busy`}.
+         * */
+        public final Thread interrupt() {
+            Object cur;
+            if ((cur = PARKING.getAndSet(this, null)) != null) {
+                Thread t = (Thread) cur;
+                LockSupport.unpark(t);
+                return t;
+            }
+            return null;
+        }
+
+        /**
+         * @return
+         * <ul>
+         *     <li>{@code `null`} If the shutdown was successful, but the class was NOT {@code `busy`}</li>
+         *     <li>{@code `true`} If the shutdown was successful, and the class WAS {@code `busy`}</li>
+         *     <li>{@code `false`} If the shutdown was NOT successful, because the class was ALREADY shutdown</li>
+         * </ul>
+         * */
+        public final Boolean shutdown() {
+            if (isShutdown.compareAndSet(false, true)) {
+                Object cur;
+                if (
+                        (cur = PARKING.getAndSet(this, null)) != null
+                ) {
+                    Thread t = (Thread) cur;
+                    LockSupport.unpark(t);
+                    return true;
+                } else return null;
+            } else return false;
         }
     }
 
@@ -178,7 +146,7 @@ public final class Locks<E extends Exception> {
         if (unit == null) throw new NullPointerException("Unit cannot be null");
     }
 
-    public static void robustPark(TimeUnit unit, long duration) {
+    public static void robustPark(long duration, TimeUnit unit) {
         durationExcep(duration);
         long currentNano = System.nanoTime();
         final long end = currentNano + unit.toNanos(duration);
@@ -217,7 +185,7 @@ public final class Locks<E extends Exception> {
         globalConfig = new Config(builder1);
     }
 
-    static final class Config {
+    public static final class Config {
         private final int initialWaitFraction, maxWaitFraction;
         final long totalNanos, initialWaitNanos, maxWaitNanos;
         final double backOffFactor;
@@ -383,6 +351,29 @@ public final class Locks<E extends Exception> {
                 this.maxWaitNanos = totalNanos / maxWaitFraction;
             }
         }
+
+        @Override
+        public String toString() {
+            return "Config{" +
+                    "\n   >> initialWaitFraction=" + initialWaitFraction +
+                    ",\n   >> maxWaitFraction=" + maxWaitFraction +
+                    ",\n   >> totalNanos=" + totalNanos +
+                    ",\n         >> totalNanos=\n" + formatNanos(totalNanos).indent(10) +
+                    "   >> initialWaitNanos=" + initialWaitNanos +
+                    ",\n   >> maxWaitNanos=" + maxWaitNanos +
+                    ",\n   >> backOffFactor=" + backOffFactor
+                    + '}';
+        }
+    }
+
+    static String formatNanos(long nanos) {
+        // Break down nanos into seconds, milliseconds, and remaining nanoseconds
+        long seconds = TimeUnit.NANOSECONDS.toSeconds(nanos);
+        long millis = TimeUnit.NANOSECONDS.toMillis(nanos) % 1000;
+        long remainingNanos = nanos % 1_000_000;
+
+        // Build the formatted string
+        return String.format("%d[seconds]: %03d[millis]: %03d[nanos]", seconds, millis, remainingNanos);
     }
 
     public static final class ExceptionConfig<E extends Exception> {
@@ -407,9 +398,7 @@ public final class Locks<E extends Exception> {
                     ref = new ExceptionConfig<>(DefaultExc.runtime.ref, getConfig());
         }
 
-        public static ExceptionConfig<RuntimeException> runtime() {
-            return runtime.ref;
-        }
+        public static ExceptionConfig<RuntimeException> runtime() { return runtime.ref; }
 
         record timeout() {
             static final ExceptionConfig<TimeoutException>
@@ -464,11 +453,26 @@ public final class Locks<E extends Exception> {
                     exception, getConfig());
         }
 
+        record large_timeout() {
+            static final ExceptionConfig<TimeoutException> ref = timeout(10, TimeUnit.SECONDS);
+        }
+
+        record large_runtime() {
+            static final ExceptionConfig<RuntimeException> ref = runtime(builder -> builder.setDurationUnit(10, TimeUnit.SECONDS));
+        }
+
         /**
          * Will wait 10 seconds until {@link TimeoutException}
          * */
         public static ExceptionConfig<TimeoutException> largeTimeout() {
-            return timeout(10, TimeUnit.SECONDS);
+            return large_timeout.ref;
+        }
+
+        /**
+         * Will wait 10 seconds until {@link RuntimeException}
+         * */
+        public static ExceptionConfig<RuntimeException> largeRuntime() {
+            return large_runtime.ref;
         }
 
         ExceptionConfig<E> copyWith(long duration, TimeUnit unit) {
@@ -478,6 +482,14 @@ public final class Locks<E extends Exception> {
             Config.Builder builder1 = new Config.Builder(config);
             builder.accept(builder1);
             return new ExceptionConfig<>(exception, new Config(builder1));
+        }
+
+        @Override
+        public String toString() {
+            return "ExceptionConfig{" +
+                    "\n    >> exception=" + exception +
+                    ",\n    >> config=\n" + config.toString().indent(3) +
+                    '}';
         }
     }
 
@@ -635,5 +647,4 @@ public final class Locks<E extends Exception> {
                 unless, null
         );
     }
-
 }

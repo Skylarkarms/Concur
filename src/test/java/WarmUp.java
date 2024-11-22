@@ -4,12 +4,14 @@ import com.skylarkarms.concur.Locks;
 import java.util.Arrays;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class WarmUp {
 
     private final Locks.Valet doneVal = new Locks.Valet();
+//    private final Locks.Valet doneVal = new Locks.Valet();
 
     volatile int res = -1;
 
@@ -30,7 +32,8 @@ public class WarmUp {
                         if (num == (rand - 1)) {
                             System.out.println("" +
                                     "\n >>> unparking...\n");
-                            doneVal.discharge();
+                            doneVal.shutdown();
+//                            doneVal.discharge();
                         }
                     }
             );
@@ -39,11 +42,12 @@ public class WarmUp {
         executor.execute(
                 () -> {
                     nextRand[0] = (10 - r.nextInt(5));
-                    try {
-                        doneVal.park();
-                    } catch (TimeoutException e) {
-                        throw new RuntimeException(e);
-                    }
+//                    try {
+                        doneVal.parkShutdown(500, TimeUnit.MILLISECONDS);
+//                        doneVal.park();
+//                    } catch (TimeoutException e) {
+//                        throw new RuntimeException(e);
+//                    }
 
                     int res_i = 0;
                     System.out.println("\n >> res = \n" + Arrays.toString(res) + "\n");
