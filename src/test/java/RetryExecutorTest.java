@@ -57,6 +57,17 @@ public class RetryExecutorTest {
 
         System.out.println("<<<<<<<<||||||>>>>>>>");
         Locks.robustPark(Duration.ofSeconds(5).toNanos());
+
+//        LazyHolder.setGlobalConfig(
+//                LazyHolder.SpinnerConfig.timeout(500)
+////                LazyHolder.SpinnerConfig.custom(
+////                        params -> {
+//////                    params.amplify(1.5);
+////                            params.setTimeoutMillis(500);
+////                        }
+////                )
+//        );
+
         Executors.Delayer delayer =
                 new Executors.Delayer(5, TimeUnit.SECONDS);
 
@@ -82,16 +93,26 @@ public class RetryExecutorTest {
         System.err.println("<<<<<<<<||||||>>>>>>>");
         Locks.robustPark(Duration.ofSeconds(5).toNanos());
 
-        LazyHolder.debug = true;
-        LazyHolder.setGlobalConfig(LazyHolder.SpinnerConfig.custom(
-                params -> {
-                    params.amplify(1.5);
-                }
-        ));
+        LazyHolder.setDebug(true);
+        Locks.ExceptionConfig<RuntimeException> config = Locks.ExceptionConfig.runtime(
+                Locks.Config.Builder::setUnbridled
+        );
+//        LazyHolder.SpinnerConfig customConfig = LazyHolder.SpinnerConfig.custom(
+//                params -> {
+//                    params.amplify((1.5 * 3));
+//                }
+//        );
+//        LazyHolder.setGlobalConfig(LazyHolder.SpinnerConfig.custom(
+//                params -> {
+//                    params.amplify(1.5);
+//                }
+//        ));
 
         record TAG(double i, String name, String tag){}
         LazyHolder.Supplier<TAG> integerSupplier = new LazyHolder.Supplier<>(
-                params -> params.amplify(3),
+                config,
+//                customConfig,
+//                params -> params.amplify(3),
                 () -> new TAG(Math.pow(5, 6), "Juan", "LOL")
         );
 

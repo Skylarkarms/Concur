@@ -34,9 +34,7 @@ public final class Locks<E extends Exception> {
         /**
          * @see #parkUnpark(long)
          * */
-        public final Boolean parkUnpark(long duration, TimeUnit unit) {
-            return parkUnpark(unit.toNanos(duration));
-        }
+        public final Boolean parkUnpark(long duration, TimeUnit unit) { return parkUnpark(unit.toNanos(duration)); }
         /**
          * @return
          * <ul>
@@ -105,8 +103,8 @@ public final class Locks<E extends Exception> {
          * @return {@code `null`} if this class was NOT {@code `busy`}.
          * */
         public final Thread interrupt() {
-            Object cur;
-            if ((cur = PARKING.getAndSet(this, null)) != null) {
+            Object cur = PARKING.getAndSet(this, null);
+            if (cur != null) {
                 Thread t = (Thread) cur;
                 LockSupport.unpark(t);
                 return t;
@@ -124,10 +122,8 @@ public final class Locks<E extends Exception> {
          * */
         public final Boolean shutdown() {
             if (isShutdown.compareAndSet(false, true)) {
-                Object cur;
-                if (
-                        (cur = PARKING.getAndSet(this, null)) != null
-                ) {
+                Object cur = PARKING.getAndSet(this, null);
+                if (cur != null) {
                     Thread t = (Thread) cur;
                     LockSupport.unpark(t);
                     return true;
@@ -136,7 +132,7 @@ public final class Locks<E extends Exception> {
         }
     }
 
-    private static void durationExcep(long duration) {
+    static void durationExcep(long duration) {
         if (duration == 0 || duration == Long.MAX_VALUE) throw new IllegalStateException("Not a valid duration");
     }
 
@@ -165,24 +161,24 @@ public final class Locks<E extends Exception> {
     }
 
     private static Config globalConfig = Config.DEFAULT_CONFIG;
-    private static final AtomicBoolean grabbed = new AtomicBoolean();
-
-    private static Config getConfig() {
-        grabbed.setOpaque(true);
-        return globalConfig;
+    private static boolean grabbed;
+    record GLOBAL_CONFIG() { static {grabbed = true;}
+        static final Config ref = globalConfig;
     }
 
     public static synchronized void setGlobalConfig(Consumer<Config.Builder> builder) {
         if (builder == null) throw new NullPointerException("`builder` was null");
         if (globalConfig != Config.DEFAULT_CONFIG) throw new IllegalStateException("Can only set once");
-        if (grabbed.getOpaque())
-            throw new IllegalStateException("A Lock has already been instantiated with a `globalConfig` Config instance.");
+        if (grabbed) throw new IllegalStateException("A Lock has already been instantiated with a `globalConfig` Config instance.");
 
         Config.Builder builder1 = new Config.Builder(globalConfig);
         builder.accept(builder1);
         globalConfig = new Config(builder1);
     }
 
+    /**
+     * Class which holds the parameters needed to perform an <b>Adaptive Thread Parking</b>
+     * */
     public static final class Config {
         private final int initialWaitFraction, maxWaitFraction;
         final long totalNanos, initialWaitNanos, maxWaitNanos;
@@ -212,14 +208,31 @@ public final class Locks<E extends Exception> {
                 1.3
         );
 
+        /**
+         * "UNBRIDLED" type of busy spin-lock.
+         * The task will not yield.
+         * For Adaptive Parking use {@link #DEFAULT_CONFIG} instead.
+         * */
+        public static final Config UNBRIDLED = new Config(
+                0,
+                0,
+                0,
+                0
+        );
+
         Config(
                 long totalNanos, int initialWaitFraction, int maxWaitFraction, double backOffFactor) {
             this.totalNanos = totalNanos;
             this.initialWaitFraction = initialWaitFraction;
             this.maxWaitFraction = maxWaitFraction;
-            this.initialWaitNanos = totalNanos / initialWaitFraction;
-            this.maxWaitNanos = totalNanos / maxWaitFraction;
             this.backOffFactor = backOffFactor;
+            if (totalNanos != 0) {
+                this.initialWaitNanos = totalNanos / initialWaitFraction;
+                this.maxWaitNanos = totalNanos / maxWaitFraction;
+            } else {
+                this.initialWaitNanos = 0;
+                this.maxWaitNanos = 0;
+            }
         }
         Config(
                 Builder builder) {
@@ -271,6 +284,7 @@ public final class Locks<E extends Exception> {
             }
 
             public Builder setInitialWaitFraction(int initialWaitFraction) {
+                unbridledException();
                 if (this.initialWaitFraction != initialWaitFraction) {
                     this.initialWaitFraction = initialWaitFraction;
                     waitFractionException();
@@ -280,10 +294,13 @@ public final class Locks<E extends Exception> {
             }
 
             public void setBackOffFactor(double backOffFactor) {
+                unbridledException();
+                if (!(backOffFactor > 1)) throw new IllegalStateException("The factor should be greater than 1 to ensure a proper increase.");
                 this.backOffFactor = backOffFactor;
             }
 
             public Builder setMaxWaitFraction(int maxWaitFraction) {
+                unbridledException();
                 if (this.maxWaitFraction != maxWaitFraction) {
                     this.maxWaitFraction = maxWaitFraction;
                     waitFractionException();
@@ -292,41 +309,55 @@ public final class Locks<E extends Exception> {
                 return this;
             }
 
+            /**
+             * Will return null if the duration is set to {@code `0`} or {@link Long#MAX_VALUE}, preventing any further mutation.
+             * */
             public Builder setDurationUnit(long duration, TimeUnit unit) {
-                unitExcept(unit);
-                durationExcep(duration);
+                if (duration == 0 || duration == Long.MAX_VALUE) {
+                    totalNanos = 0;
+                    return null;
+                } else {
+                    unitExcept(unit);
+                    final boolean firstDiff;
 
-                final boolean firstDiff;
-
-                if (
-                        (firstDiff = duration != this.totalDuration)
-                                ||
-                                this.unit != unit
-                ) {
-                    if (firstDiff) {
-                        if (this.unit != unit) {
+                    if (
+                            (firstDiff = duration != this.totalDuration)
+                                    ||
+                                    this.unit != unit
+                    ) {
+                        if (firstDiff) {
+                            if (this.unit != unit) {
+                                this.unit = unit;
+                            }
+                            this.totalDuration = duration;
+                        } else {
                             this.unit = unit;
                         }
-                        this.totalDuration = duration;
-                    } else {
-                        this.unit = unit;
+                        setTotalNanos();
                     }
-                    setTotalNanos();
-                }
 
-                return this;
+                    return this;
+                }
             }
 
+            /**
+             * Will return null if the duration is set to {@code `0`} or {@link Long#MAX_VALUE}, preventing any further mutation.
+             * */
             public Builder setTotalDuration(long totalDuration) {
-                durationExcep(totalDuration);
-                if (this.totalDuration != totalDuration) {
-                    this.totalDuration = totalDuration;
-                    setTotalNanos();
+                if (totalDuration == 0 || totalDuration == Long.MAX_VALUE) {
+                    totalNanos = 0;
+                    return null;
+                } else {
+                    if (this.totalDuration != totalDuration) {
+                        this.totalDuration = totalDuration;
+                        setTotalNanos();
+                    }
+                    return this;
                 }
-                return this;
             }
 
             public Builder setUnit(TimeUnit unit) {
+                unbridledException();
                 unitExcept(unit);
                 if (this.unit != unit) {
                     this.unit = unit;
@@ -348,10 +379,31 @@ public final class Locks<E extends Exception> {
             private void setMaxWaitNanos() {
                 this.maxWaitNanos = totalNanos / maxWaitFraction;
             }
+
+            public void setUnbridled() {
+                totalNanos = 0;
+            }
+
+            boolean isUnbridled() {
+                return totalNanos == 0;
+            }
+
+            private void unbridledException() {
+                if (totalNanos == 0) throw new IllegalStateException("totalDuration was set to 0 (unbridled), configuration not allowed.");
+            }
+        }
+
+        boolean isUnbridled() {
+            return totalNanos == 0;
+        }
+
+        void unbridledException() {
+            if (totalNanos == 0) throw new IllegalStateException("totalDuration was set to 0 (unbridled), configuration not allowed.");
         }
 
         @Override
         public String toString() {
+            if (totalNanos == 0) return "Config{ UNBRIDLED }";
             return "Config{" +
                     "\n   >> initialWaitFraction=" + initialWaitFraction +
                     ",\n   >> maxWaitFraction=" + maxWaitFraction +
@@ -374,6 +426,10 @@ public final class Locks<E extends Exception> {
         return String.format("%d[seconds]: %03d[millis]: %03d[nanos]", seconds, millis, remainingNanos);
     }
 
+    /**
+     * Component holding information aboout the type of both:
+     * {@link Config}
+     * */
     public static final class ExceptionConfig<E extends Exception> {
         final Supplier<E> exception; final Config config;
 
@@ -393,49 +449,56 @@ public final class Locks<E extends Exception> {
 
         record runtime() {
             static final ExceptionConfig<RuntimeException>
-                    ref = new ExceptionConfig<>(DefaultExc.runtime.ref, getConfig());
+                    ref = new ExceptionConfig<>(DefaultExc.runtime.ref, GLOBAL_CONFIG.ref);
         }
 
         public static ExceptionConfig<RuntimeException> runtime() { return runtime.ref; }
 
         record timeout() {
             static final ExceptionConfig<TimeoutException>
-                    ref = new ExceptionConfig<>(DefaultExc.timeout.ref, getConfig());
+                    ref = new ExceptionConfig<>(DefaultExc.timeout.ref, GLOBAL_CONFIG.ref);
         }
 
         /**
          * Uses the default configuration defined at {@link #globalConfig} via {@link #setGlobalConfig(Consumer)}
          * */
-        public static ExceptionConfig<TimeoutException> timeout() {
-            return timeout.ref;
-        }
+        public static ExceptionConfig<TimeoutException> timeout() { return timeout.ref; }
 
         public static ExceptionConfig<TimeoutException> timeout(long duration, TimeUnit unit) {
             return new ExceptionConfig<>(
-                    DefaultExc.timeout.ref, new Config(duration, unit, getConfig()));
+                    DefaultExc.timeout.ref, new Config(duration, unit, GLOBAL_CONFIG.ref));
         }
 
         public static ExceptionConfig<TimeoutException> timeout(long millis) {
             return new ExceptionConfig<>(
-                    DefaultExc.timeout.ref, new Config(millis, TimeUnit.MILLISECONDS, getConfig()));
+                    DefaultExc.timeout.ref, new Config(millis, TimeUnit.MILLISECONDS, GLOBAL_CONFIG.ref));
         }
 
         public static ExceptionConfig<TimeoutException> timeout(Consumer<Config.Builder> builder) {
-            Config.Builder builder1 = new Config.Builder(getConfig());
+            Config.Builder builder1 = new Config.Builder(GLOBAL_CONFIG.ref);
             builder.accept(builder1);
             return new ExceptionConfig<>(
                     DefaultExc.timeout.ref, new Config(builder1));
         }
 
+        /**
+         * Will use {@link Locks#globalConfig} instance as base reference triggering
+         * a lazy initialization on its configuration.
+         * */
         public static ExceptionConfig<RuntimeException> runtime(Consumer<Config.Builder> builder) {
-            Config.Builder builder1 = new Config.Builder(getConfig());
+            Config.Builder builder1 = new Config.Builder(GLOBAL_CONFIG.ref);
             builder.accept(builder1);
             return new ExceptionConfig<>(
                     DefaultExc.runtime.ref, new Config(builder1));
         }
 
+        public static ExceptionConfig<RuntimeException> runtime(Config.Builder builder) {
+            return new ExceptionConfig<>(
+                    DefaultExc.runtime.ref, new Config(builder));
+        }
+
         public static<E extends Exception> ExceptionConfig<E> custom(Supplier<E> exception, Consumer<Config.Builder> builder) {
-            Config.Builder builder1 = new Config.Builder(getConfig());
+            Config.Builder builder1 = new Config.Builder(GLOBAL_CONFIG.ref);
             builder.accept(builder1);
             return new ExceptionConfig<>(
                     exception, new Config(builder1));
@@ -443,12 +506,12 @@ public final class Locks<E extends Exception> {
 
         public static<E extends Exception> ExceptionConfig<E> custom(Supplier<E> exception, long millis) {
             return new ExceptionConfig<>(
-                    exception, new Config(millis, TimeUnit.MILLISECONDS, getConfig()));
+                    exception, new Config(millis, TimeUnit.MILLISECONDS, GLOBAL_CONFIG.ref));
         }
 
         public static<E extends Exception> ExceptionConfig<E> custom(Supplier<E> exception) {
             return new ExceptionConfig<>(
-                    exception, getConfig());
+                    exception, GLOBAL_CONFIG.ref);
         }
 
         record large_timeout() {
@@ -462,16 +525,12 @@ public final class Locks<E extends Exception> {
         /**
          * Will wait 10 seconds until {@link TimeoutException}
          * */
-        public static ExceptionConfig<TimeoutException> largeTimeout() {
-            return large_timeout.ref;
-        }
+        public static ExceptionConfig<TimeoutException> largeTimeout() { return large_timeout.ref; }
 
         /**
          * Will wait 10 seconds until {@link RuntimeException}
          * */
-        public static ExceptionConfig<RuntimeException> largeRuntime() {
-            return large_runtime.ref;
-        }
+        public static ExceptionConfig<RuntimeException> largeRuntime() { return large_runtime.ref; }
 
         ExceptionConfig<E> copyWith(long duration, TimeUnit unit) {
             return new ExceptionConfig<>(exception, new Config(duration, unit, config));
@@ -498,7 +557,7 @@ public final class Locks<E extends Exception> {
     ) throws E {
         waitIf(
                 exception,
-                getConfig(),
+                GLOBAL_CONFIG.ref,
                 condition,
                 cause
         );
@@ -510,6 +569,7 @@ public final class Locks<E extends Exception> {
             BooleanSupplier condition,
             Supplier<String> cause
     ) throws E {
+        config.unbridledException();
         if (!condition.getAsBoolean()) return;
         long totalTimeNanos = config.totalNanos;
         long currentNanoTime = System.nanoTime();
@@ -565,6 +625,7 @@ public final class Locks<E extends Exception> {
             Predicate<T> unless,
             Supplier<String> cause
     ) throws E {
+        config.unbridledException();
         T res;
         if (!unless.test(res = supplier.get())) return res;
         long totalTimeNanos = config.totalNanos;

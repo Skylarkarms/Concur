@@ -447,9 +447,15 @@ public final class Executors {
         public static void oneShot(
                 Executor executor,
                 long duration, TimeUnit unit, Runnable runnable) {
+            Locks.durationExcep(duration);
             executor.execute(
                     () -> {
-                        Locks.robustPark(duration, unit);
+                        long currentNano = System.nanoTime();
+                        final long end = currentNano + unit.toNanos(duration);
+                        while (currentNano < end) {
+                            LockSupport.parkNanos(end - currentNano);
+                            currentNano = System.nanoTime();
+                        }
                         runnable.run();
                     }
             );
@@ -468,9 +474,16 @@ public final class Executors {
          * */
         public static void oneShot(
                 long duration, TimeUnit unit, Runnable runnable) {
+            Locks.durationExcep(duration);
+            final long nanos = unit.toNanos(duration);
             ONE_SHOT.ref.newThread(
                     () -> {
-                        Locks.robustPark(duration, unit);
+                        long currentNano = System.nanoTime();
+                        final long end = currentNano + nanos;
+                        while (currentNano < end) {
+                            LockSupport.parkNanos(end - currentNano);
+                            currentNano = System.nanoTime();
+                        }
                         runnable.run();
                     }
             ).start();
@@ -685,15 +698,20 @@ public final class Executors {
                     if (
                             curr == ticket.getOpaque()
                     ) {
-                        assert EXEC.compareAndSet(this, prev, newE);
+                        boolean done = EXEC.compareAndSet(this, prev, newE);
+                        assert done;
                         break;
                     } else {
                         pass++;
                         if (pass < 21) {
                             // short sleep and repeat....
-                            Locks.robustPark(
-                                    localWaitNanos
-                            );
+                            long currentNano = System.nanoTime();
+                            final long end = currentNano + localWaitNanos;
+                            while (currentNano < end) {
+                                LockSupport.parkNanos(end - currentNano);
+                                currentNano = System.nanoTime();
+                            }
+
                             localWaitNanos *= 2;
                             curr = ticket.getOpaque();
                         } else {
