@@ -160,6 +160,9 @@ public final class Locks<E extends Exception> {
         }
     }
 
+    /**
+     * Will default to the values of {@link Config#DEFAULT_CONFIG}
+     * */
     private static Config globalConfig = Config.DEFAULT_CONFIG;
     private static boolean grabbed;
     record GLOBAL_CONFIG() { static {grabbed = true;}
@@ -256,9 +259,6 @@ public final class Locks<E extends Exception> {
         }
 
         public static final class Builder {
-            private TimeUnit unit;
-            private long totalDuration;
-
             int initialWaitFraction;
             int maxWaitFraction;
             double backOffFactor;
@@ -266,10 +266,7 @@ public final class Locks<E extends Exception> {
             long totalNanos;
             long initialWaitNanos;
             long maxWaitNanos;
-
             Builder(Config defaultConfig) {
-                this.unit = TimeUnit.NANOSECONDS;
-                this.totalDuration = defaultConfig.totalNanos;
                 this.initialWaitFraction = defaultConfig.initialWaitFraction;
                 this.maxWaitFraction = defaultConfig.maxWaitFraction;
                 this.backOffFactor = defaultConfig.backOffFactor;
@@ -309,84 +306,54 @@ public final class Locks<E extends Exception> {
                 return this;
             }
 
+            public Builder setTotalNanos(long totalNanos) {
+                if (this.totalNanos != totalNanos) {
+                    this.totalNanos = totalNanos;
+                    setInitialWaitNanos();
+                    setMaxWaitNanos();
+                }
+                return totalNanos == 0 ? null : this;
+            }
+
+            public Builder setTotalMillis(long totalMillis) {
+                return setTotal(totalMillis, TimeUnit.MILLISECONDS);
+            }
+
             /**
              * Will return null if the duration is set to {@code `0`} or {@link Long#MAX_VALUE}, preventing any further mutation.
              * */
-            public Builder setDurationUnit(long duration, TimeUnit unit) {
+            public Builder setTotal(long duration, TimeUnit unit) {
                 if (duration == 0 || duration == Long.MAX_VALUE) {
                     totalNanos = 0;
                     return null;
                 } else {
                     unitExcept(unit);
-                    final boolean firstDiff;
-
-                    if (
-                            (firstDiff = duration != this.totalDuration)
-                                    ||
-                                    this.unit != unit
-                    ) {
-                        if (firstDiff) {
-                            if (this.unit != unit) {
-                                this.unit = unit;
-                            }
-                            this.totalDuration = duration;
-                        } else {
-                            this.unit = unit;
-                        }
-                        setTotalNanos();
-                    }
-
-                    return this;
-                }
-            }
-
-            /**
-             * Will return null if the duration is set to {@code `0`} or {@link Long#MAX_VALUE}, preventing any further mutation.
-             * */
-            public Builder setTotalDuration(long totalDuration) {
-                if (totalDuration == 0 || totalDuration == Long.MAX_VALUE) {
-                    totalNanos = 0;
-                    return null;
-                } else {
-                    if (this.totalDuration != totalDuration) {
-                        this.totalDuration = totalDuration;
-                        setTotalNanos();
+                    long totalNanos = unit.toNanos(duration);
+                    if (this.totalNanos != totalNanos) {
+                        this.totalNanos = totalNanos;
+                        setInitialWaitNanos();
+                        setMaxWaitNanos();
                     }
                     return this;
                 }
             }
 
-            public Builder setUnit(TimeUnit unit) {
+            public long getTotalNanos() {
+                return totalNanos;
+            }
+
+            private void setInitialWaitNanos() { this.initialWaitNanos = totalNanos / initialWaitFraction; }
+
+            private void setMaxWaitNanos() { this.maxWaitNanos = totalNanos / maxWaitFraction; }
+
+            public void setUnbridled() { totalNanos = 0; }
+
+            public void multiply(double factor) {
                 unbridledException();
-                unitExcept(unit);
-                if (this.unit != unit) {
-                    this.unit = unit;
-                    setTotalNanos();
-                }
-                return this;
+                setTotalNanos((long) (totalNanos * factor));
             }
 
-            private void setTotalNanos() {
-                this.totalNanos = unit.toNanos(totalDuration);
-                setInitialWaitNanos();
-                setMaxWaitNanos();
-            }
-
-            private void setInitialWaitNanos() {
-                this.initialWaitNanos = totalNanos / initialWaitFraction;
-            }
-
-            private void setMaxWaitNanos() {
-                this.maxWaitNanos = totalNanos / maxWaitFraction;
-            }
-
-            public void setUnbridled() {
-                totalNanos = 0;
-            }
-
-            boolean isUnbridled() {
-                return totalNanos == 0;
-            }
+            boolean isUnbridled() { return totalNanos == 0; }
 
             private void unbridledException() {
                 if (totalNanos == 0) throw new IllegalStateException("totalDuration was set to 0 (unbridled), configuration not allowed.");
@@ -427,11 +394,26 @@ public final class Locks<E extends Exception> {
     }
 
     /**
-     * Component holding information aboout the type of both:
-     * {@link Config}
+     * Component holding information about the type of both:
+     * <ul>
+     *     <li>{@link Config} timeout configurations</li>
+     *     <li>{@link Supplier}&#60;{@link Exception}&#62; defining the Exception to be generated.</li>
+     * </ul>
      * */
     public static final class ExceptionConfig<E extends Exception> {
         final Supplier<E> exception; final Config config;
+
+        public boolean isUnbridled() {
+            return config.isUnbridled();
+        }
+
+        public Config getConfig() {
+            return config;
+        }
+
+        public Supplier<E> getException() {
+            return exception;
+        }
 
         static final class DefaultExc {
             record runtime() {
@@ -449,47 +431,116 @@ public final class Locks<E extends Exception> {
 
         record runtime() {
             static final ExceptionConfig<RuntimeException>
-                    ref = new ExceptionConfig<>(DefaultExc.runtime.ref, GLOBAL_CONFIG.ref);
+                    ref = new ExceptionConfig<>(DefaultExc.runtime.ref, Config.DEFAULT_CONFIG);
         }
 
-        public static ExceptionConfig<RuntimeException> runtime() { return runtime.ref; }
-
-        record timeout() {
-            static final ExceptionConfig<TimeoutException>
-                    ref = new ExceptionConfig<>(DefaultExc.timeout.ref, GLOBAL_CONFIG.ref);
+        record unbridled() {
+            static final ExceptionConfig<RuntimeException>
+                    ref = new ExceptionConfig<>(null, Config.UNBRIDLED);
         }
 
         /**
-         * Uses the default configuration defined at {@link #globalConfig} via {@link #setGlobalConfig(Consumer)}
+         * Will adopt the values defined at {@link Config#DEFAULT_CONFIG}.
+         * */
+        public static ExceptionConfig<RuntimeException> runtime() { return runtime.ref; }
+
+        /**
+         * Will adopt the values defined at {@link Config#UNBRIDLED}.
+         * */
+        public static ExceptionConfig<RuntimeException> unbridled() { return unbridled.ref; }
+
+        record timeout() {
+            static final ExceptionConfig<TimeoutException>
+                    ref = new ExceptionConfig<>(DefaultExc.timeout.ref, Config.DEFAULT_CONFIG);
+        }
+
+        /**
+         * Will adopt the values defined at {@link Config#DEFAULT_CONFIG}.
          * */
         public static ExceptionConfig<TimeoutException> timeout() { return timeout.ref; }
 
+        /**
+         * Will use the values defined at {@link Config#DEFAULT_CONFIG} as predefined values, for all the values not defined in this method.
+         * */
         public static ExceptionConfig<TimeoutException> timeout(long duration, TimeUnit unit) {
             return new ExceptionConfig<>(
-                    DefaultExc.timeout.ref, new Config(duration, unit, GLOBAL_CONFIG.ref));
+                    DefaultExc.timeout.ref, new Config(duration, unit, Config.DEFAULT_CONFIG));
         }
 
+        /**
+         * Will use the values defined at {@link Config#DEFAULT_CONFIG} as predefined values, for all the values not defined in this method.
+         * */
         public static ExceptionConfig<TimeoutException> timeout(long millis) {
             return new ExceptionConfig<>(
-                    DefaultExc.timeout.ref, new Config(millis, TimeUnit.MILLISECONDS, GLOBAL_CONFIG.ref));
+                    DefaultExc.timeout.ref, new Config(millis, TimeUnit.MILLISECONDS, Config.DEFAULT_CONFIG));
         }
 
+        /**
+         * Will grab an instance that uses the {@link GLOBAL_CONFIG#ref} as default configuration.
+         * */
+        record GLOBAL_TIMEOUT() {
+            static final ExceptionConfig<TimeoutException> ref = new ExceptionConfig<>(
+                    DefaultExc.timeout.ref, GLOBAL_CONFIG.ref);
+        }
+
+        /**
+         * Will use the values defined at {@link Config#DEFAULT_CONFIG} as predefined values, for all the values not defined in this method.
+         * */
+        public static ExceptionConfig<TimeoutException> timeout(Config config) {
+            if (grabbed && config == GLOBAL_CONFIG.ref) return GLOBAL_TIMEOUT.ref;
+            else return new ExceptionConfig<>(
+                    DefaultExc.timeout.ref, config);
+        }
+
+        /**
+         * Will use the values defined at {@link Config#DEFAULT_CONFIG} as base predefined values.
+         * */
         public static ExceptionConfig<TimeoutException> timeout(Consumer<Config.Builder> builder) {
-            Config.Builder builder1 = new Config.Builder(GLOBAL_CONFIG.ref);
+            Config.Builder builder1 = new Config.Builder(Config.DEFAULT_CONFIG);
             builder.accept(builder1);
             return new ExceptionConfig<>(
                     DefaultExc.timeout.ref, new Config(builder1));
         }
 
         /**
-         * Will use {@link Locks#globalConfig} instance as base reference triggering
-         * a lazy initialization on its configuration.
+         * Will use the values defined at {@link Config#DEFAULT_CONFIG} as base predefined values.
          * */
         public static ExceptionConfig<RuntimeException> runtime(Consumer<Config.Builder> builder) {
-            Config.Builder builder1 = new Config.Builder(GLOBAL_CONFIG.ref);
+            Config.Builder builder1 = new Config.Builder(Config.DEFAULT_CONFIG);
             builder.accept(builder1);
             return new ExceptionConfig<>(
                     DefaultExc.runtime.ref, new Config(builder1));
+        }
+
+        record GLOBAL_RUNTIME() {
+            static ExceptionConfig<RuntimeException> ref = new ExceptionConfig<>(
+                    DefaultExc.runtime.ref, GLOBAL_CONFIG.ref);
+        }
+
+        public static ExceptionConfig<RuntimeException> runtime(Config config) {
+            if (grabbed && config == GLOBAL_CONFIG.ref) return GLOBAL_RUNTIME.ref;
+            else return new ExceptionConfig<>(
+                    DefaultExc.runtime.ref, config);
+        }
+
+        /**
+         * Will adopt the values `defaultConfig` as default base values
+         * before the {@link Consumer}&#60;{@link Config.Builder}&#62; {@code `builder`} allows a reconfiguration.
+         * By default, this will throw a {@link RuntimeException}
+         * */
+        public static ExceptionConfig<RuntimeException> runtime(Config defaultConfig, Consumer<Config.Builder> builder) {
+            Config.Builder builder1 = new Config.Builder(defaultConfig);
+            builder.accept(builder1);
+            return new ExceptionConfig<>(
+                    DefaultExc.runtime.ref, new Config(builder1));
+        }
+
+        /**
+         * Will use {@link Config#DEFAULT_CONFIG} instance as base reference.
+         * */
+        public static ExceptionConfig<RuntimeException> runtime(long duration, TimeUnit unit) {
+            return new ExceptionConfig<>(
+                    DefaultExc.runtime.ref, new Config(duration, unit, Config.DEFAULT_CONFIG));
         }
 
         public static ExceptionConfig<RuntimeException> runtime(Config.Builder builder) {
@@ -497,16 +548,22 @@ public final class Locks<E extends Exception> {
                     DefaultExc.runtime.ref, new Config(builder));
         }
 
+        /**
+         * Will use {@link Config#DEFAULT_CONFIG} instance as base reference.
+         * */
         public static<E extends Exception> ExceptionConfig<E> custom(Supplier<E> exception, Consumer<Config.Builder> builder) {
-            Config.Builder builder1 = new Config.Builder(GLOBAL_CONFIG.ref);
+            Config.Builder builder1 = new Config.Builder(Config.DEFAULT_CONFIG);
             builder.accept(builder1);
             return new ExceptionConfig<>(
                     exception, new Config(builder1));
         }
 
+        /**
+         * Will use {@link Config#DEFAULT_CONFIG} instance as base reference.
+         * */
         public static<E extends Exception> ExceptionConfig<E> custom(Supplier<E> exception, long millis) {
             return new ExceptionConfig<>(
-                    exception, new Config(millis, TimeUnit.MILLISECONDS, GLOBAL_CONFIG.ref));
+                    exception, new Config(millis, TimeUnit.MILLISECONDS, Config.DEFAULT_CONFIG));
         }
 
         public static<E extends Exception> ExceptionConfig<E> custom(Supplier<E> exception) {
@@ -514,23 +571,41 @@ public final class Locks<E extends Exception> {
                     exception, GLOBAL_CONFIG.ref);
         }
 
-        record large_timeout() {
+        record timeout_10() {
             static final ExceptionConfig<TimeoutException> ref = timeout(10, TimeUnit.SECONDS);
         }
 
-        record large_runtime() {
-            static final ExceptionConfig<RuntimeException> ref = runtime(builder -> builder.setDurationUnit(10, TimeUnit.SECONDS));
+        record runtime_10() {
+            static final ExceptionConfig<RuntimeException> ref = runtime(10, TimeUnit.SECONDS);
+        }
+
+        record timeout_5() {
+            static final ExceptionConfig<TimeoutException> ref = timeout(5, TimeUnit.SECONDS);
+        }
+
+        record runtime_5() {
+            static final ExceptionConfig<RuntimeException> ref = runtime(5, TimeUnit.SECONDS);
         }
 
         /**
          * Will wait 10 seconds until {@link TimeoutException}
          * */
-        public static ExceptionConfig<TimeoutException> largeTimeout() { return large_timeout.ref; }
+        public static ExceptionConfig<TimeoutException> timeout_10() { return timeout_10.ref; }
+
+        /**
+         * Will wait 5 seconds until {@link TimeoutException}
+         * */
+        public static ExceptionConfig<TimeoutException> timeout_5() { return timeout_5.ref; }
 
         /**
          * Will wait 10 seconds until {@link RuntimeException}
          * */
-        public static ExceptionConfig<RuntimeException> largeRuntime() { return large_runtime.ref; }
+        public static ExceptionConfig<RuntimeException> runtime_10() { return runtime_10.ref; }
+
+        /**
+         * Will wait 5 seconds until {@link RuntimeException}
+         * */
+        public static ExceptionConfig<RuntimeException> runtime_5() { return runtime_5.ref; }
 
         ExceptionConfig<E> copyWith(long duration, TimeUnit unit) {
             return new ExceptionConfig<>(exception, new Config(duration, unit, config));
@@ -558,6 +633,34 @@ public final class Locks<E extends Exception> {
         waitIf(
                 exception,
                 GLOBAL_CONFIG.ref,
+                condition,
+                cause
+        );
+    }
+
+    /**
+     * Will throw {@link TimeoutException} based on the values defined by the {@link #globalConfig}
+     * */
+    public static void timeoutWaitIf(
+            BooleanSupplier condition,
+            Supplier<String> cause
+    ) throws TimeoutException {
+        waitIf(
+                ExceptionConfig.timeout(GLOBAL_CONFIG.ref),
+                condition,
+                cause
+        );
+    }
+
+    /**
+     * Will throw {@link TimeoutException} based on the values defined by the {@link #globalConfig}
+     * */
+    public static void waitIf(
+            BooleanSupplier condition,
+            Supplier<String> cause
+    ) {
+        waitIf(
+                ExceptionConfig.runtime(GLOBAL_CONFIG.ref),
                 condition,
                 cause
         );
@@ -696,6 +799,26 @@ public final class Locks<E extends Exception> {
         );
     }
 
+    public static<E extends Exception, T> T getUnlessTimeout(
+            Supplier<T> supplier,
+            Predicate<T> unless
+    ) throws TimeoutException {
+        return getUnless(
+                ExceptionConfig.timeout(GLOBAL_CONFIG.ref)
+                , supplier,
+                unless
+        );
+    }
+    public static<E extends Exception, T> T getUnless(
+            Supplier<T> supplier,
+            Predicate<T> unless
+    ) {
+        return getUnless(
+                ExceptionConfig.runtime(GLOBAL_CONFIG.ref)
+                , supplier,
+                unless
+        );
+    }
     public static<E extends Exception, T> T getUnless(
             ExceptionConfig<E> config,
             Supplier<T> supplier,

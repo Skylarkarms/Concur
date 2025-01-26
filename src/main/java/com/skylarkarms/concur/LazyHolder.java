@@ -17,7 +17,7 @@ import java.util.function.IntSupplier;
  * {@link #CREATED}.
  * <p> Different spin-lock strategies can be defined with a {@link Locks.Config} object via {@link Consumer}&lt;{@link Locks.Config.Builder}&gt; or {@link Locks.ExceptionConfig}&lt;{@link RuntimeException}&gt;.
  * */
-public class LazyHolder<T> {
+public class LazyHolder<T> implements Lazy<T>{
     /**
      * Set to {@code true} for more detailed {@link Exception}s
      * <p> Setting this to {@code true} will hamper performance.
@@ -35,12 +35,16 @@ public class LazyHolder<T> {
         static final boolean ref = debug;
     }
 
-    static Locks.ExceptionConfig<RuntimeException> holderConfig = Locks.ExceptionConfig.largeRuntime();
-    static boolean config_grabbed;
+    static volatile Locks.ExceptionConfig<RuntimeException> holderConfig = Locks.ExceptionConfig.runtime_5();
+    static volatile boolean config_grabbed;
 
-    public static void setHolderConfig(Locks.ExceptionConfig<RuntimeException> holderConfig) {
+    public static synchronized void setHolderConfig(Locks.ExceptionConfig<RuntimeException> holderConfig) {
         if (config_grabbed) throw new IllegalStateException("Configuration already in use, state must be set before any one instance of LazyHolder is initialized.");
         LazyHolder.holderConfig = holderConfig;
+    }
+
+    public static void setUnbridled() {
+        setHolderConfig(Locks.ExceptionConfig.unbridled());
     }
 
     record FINAL_CONFIG() {
@@ -68,7 +72,6 @@ public class LazyHolder<T> {
     @FunctionalInterface
     private interface Spinner<T> {
         Versioned<T> spin();
-        default  <E extends Exception>Versioned<T> spin(Locks.ExceptionConfig<E> timeoutConfig) throws E { return null;}
     }
 
     /**
@@ -79,83 +82,9 @@ public class LazyHolder<T> {
 
         @Override
         public Versioned<T> spin() { // non dupe_2 is better common
-            Versioned<T> prev;
-            prev = ref;
-            while (prev.version() < CREATED) { prev = ref; }
+            Versioned<T> prev = ref;
+            while (prev == CREATING) { prev = ref; }
             return prev;
-        }
-
-        @Override
-        public <E extends Exception> Versioned<T> spin(Locks.ExceptionConfig<E> timeoutConfig) throws E {
-            Versioned<T> load = ref;
-            Locks.Config config = timeoutConfig.config;
-
-            long currentNanoTime = System.nanoTime();
-            long totalTimeNanos = config.totalNanos;
-
-            final long end = currentNanoTime + totalTimeNanos;
-            final long maxWaitNanos = config.maxWaitNanos;      // Cap max wait to a fraction of total time
-
-            final double backOffFactor = config.backOffFactor;
-
-            long waitTime = config.initialWaitNanos; // Start with a small initial wait time
-
-            boolean limitReached = false;
-
-            while (
-                    currentNanoTime < (end - waitTime)
-                            &&
-                            load == CREATING
-            ) {
-                long currentNano = System.nanoTime();
-                final long curr_end = currentNano + waitTime;
-                while (currentNano < curr_end) {
-                    LockSupport.parkNanos(curr_end - currentNano);
-                    currentNano = System.nanoTime();
-                }
-
-                waitTime = (long)(waitTime * backOffFactor);
-                if (waitTime >= maxWaitNanos) {
-                    limitReached = true;
-                    break;
-                }
-
-                currentNanoTime = System.nanoTime();
-                load = ref;
-            }
-
-            if (limitReached) {
-                final long steadyEnd = end - maxWaitNanos;
-                while (
-                        currentNanoTime < steadyEnd
-                                &&
-                                load == CREATING
-                ) {
-                    long currentNano = System.nanoTime();
-                    final long curr_end = currentNano + maxWaitNanos;
-                    while (currentNano < curr_end) {
-                        LockSupport.parkNanos(curr_end - currentNano);
-                        currentNano = System.nanoTime();
-                    }
-
-                    currentNanoTime = System.nanoTime();
-                    load = ref;
-                }
-            }
-
-            // Final precise waiting phase
-            if (load == CREATING) {
-                long currentNano = System.nanoTime();
-                while (currentNano < end) {
-                    LockSupport.parkNanos(end - currentNano);
-                    currentNano = System.nanoTime();
-                }
-                load = ref;
-                if (load != CREATING) return load;
-                else {
-                    throw throwRuntimeException(es, timeoutConfig, totalTimeNanos);
-                }
-            } else return load;
         }
 
         @Override
@@ -244,8 +173,20 @@ public class LazyHolder<T> {
         }
 
         @Override
-        public <E extends Exception> Versioned<T> spin(Locks.ExceptionConfig<E> timeoutConfig) throws E {
-            Versioned<T> load = ref;
+        public String toString() {
+            return ">>> TimeoutSpinner{" +
+                    "\n   >>> params= " + timeoutParams
+                    + "\n}";
+        }
+    }
+
+    final <E extends Exception> Versioned<T> timeoutSpin(Locks.ExceptionConfig<E> timeoutConfig) throws E {
+        Versioned<T> load = ref;
+
+        if (timeoutConfig.config.isUnbridled()) {
+            while (load == CREATING) { load = ref; }
+            return load;
+        } else {
             Locks.Config config = timeoutConfig.config;
 
             long currentNanoTime = System.nanoTime();
@@ -316,13 +257,6 @@ public class LazyHolder<T> {
                 }
             } else return load;
         }
-
-        @Override
-        public String toString() {
-            return ">>> TimeoutSpinner{" +
-                    "\n   >>> params= " + timeoutParams
-                    + "\n}";
-        }
     }
 
     /**
@@ -341,7 +275,9 @@ public class LazyHolder<T> {
         }
     }
 
+    @Override
     public final boolean isNull() { return NULL == VALUE.getOpaque(this); }
+
     final StackTraceElement[] es;
 
     LazyHolder(
@@ -373,6 +309,7 @@ public class LazyHolder<T> {
     /**
      * @return null if the inner value was null or was already cleared
      * */
+    @Override
     public final T getAndClear() {
         int c_ver = clearingVer.incrementAndGet();
         final Versioned<T> prev = ref;
@@ -490,6 +427,7 @@ public class LazyHolder<T> {
         };
     }
 
+    @Override
     public final <E extends Exception> T getAndClear(final Locks.ExceptionConfig<E> timeoutConfig) throws E {
         int c_ver = clearingVer.incrementAndGet();
         final Versioned<T> prev = ref;
@@ -643,6 +581,7 @@ public class LazyHolder<T> {
      * @return true if the {@code expect}-ed value matched the inner value.
      * @param expect the expected value that will allow the reference clearing.
      * */
+    @Override
     public final boolean clear(T expect) {
         assert expect != null : "We'd rather expect that 'expect' was not null... thanks...";
         Versioned<T> prev = ref;
@@ -652,15 +591,11 @@ public class LazyHolder<T> {
     }
 
     /**
-     * Called once, while this reference is being {@link #CREATED}
-     * */
-    protected void onCreated(T value) {}
-
-    /**
      * Will not trigger a {@link #CREATING} process
      * @return The current value.
      * */
     @SuppressWarnings("unchecked")
+    @Override
     public final T getOpaque() { return ((Versioned<T>) VALUE.getOpaque(this)).value(); }
 
     /**
@@ -669,7 +604,7 @@ public class LazyHolder<T> {
      * {@link #builder} has finished.
      * @see LazyHolder
      * */
-    public static class Supplier<T> extends LazyHolder<T> implements java.util.function.Supplier<T> {
+    public static final class Supplier<T> extends LazyHolder<T> implements LazySupplier<T> {
         private final java.util.function.Supplier<T> builder;
 
         /**
@@ -717,691 +652,659 @@ public class LazyHolder<T> {
          * in which case both creating phases will be subjected to the same Timeout parameter.
          * The Timeout parameter will be refreshed each retry.
          * */
-        public final T reviveGet(int maxTries) throws TimeoutException {
-            return reviveGet(timeoutParams, maxTries);
-        }
-
-        public final<E extends Exception> T reviveGet(Locks.ExceptionConfig<E> config, final int maxTries) throws TimeoutException, E {
-            if (maxTries == 0) throw new IllegalStateException("Invalid retries");
-
-            final Versioned<T> val = getVersioned(config);
-            if (val.version() == CREATED) return val.value();
-            else {
-                Versioned<T> reloaded = getVersioned(config);
-                if (maxTries == Integer.MAX_VALUE) {
-                    while (reloaded == NULL) { reloaded = getVersioned(config); }
-                } else {
-                    int i = 0;
-                    while (reloaded == NULL) {
-                        if (i++ > maxTries) throw new TimeoutException("Max tries [" + maxTries + "] reached");
-                        reloaded = getVersioned(config);
-                    }
+        @Override
+        public T reviveGet(int maxTries) throws TimeoutException {
+            maxTriesException(maxTries);
+            Versioned<T> val = getVersioned();
+            if (val.version() != CREATED) {
+                int i = 0;
+                while (val == NULL) {
+                    if (i++ > maxTries) throw new TimeoutException("Max tries [" + maxTries + "] reached");
+                    val = getVersioned();
                 }
-                return reloaded.value();
             }
+            return val.value();
         }
 
         @Override
-        public final T get() {
+        public T reviveGet() {
+            Versioned<T> val = getVersioned();
+            if (val.version() != CREATED) {
+                while (val == NULL) { val = getVersioned(); }
+            }
+            return val.value();
+        }
+
+        @Override
+        public T get() {
             final Versioned<T> prev = ref;
             if (prev.version() == CREATED) return prev.value();
             else {
                 if (prev == NULL && VALUE.compareAndSet(this, NULL, CREATING)) {
                     T res = builder.get();
-                    onCreated(res);
                     ref = new Versioned<>(CREATED, res);
                     return res;
                 } else return spinner.spin().value();
             }
         }
 
-        public final<E extends Exception> T get(Locks.ExceptionConfig<E> config) throws E {
-            return getVersioned(config).value();
+        @Override
+        public <E extends Exception> T reviveGet(Locks.ExceptionConfig<E> config, final int maxTries) throws TimeoutException, E {
+            maxTriesException(maxTries);
+            Versioned<T> val = getVersioned(config);
+            if (val.version() != CREATED) {
+                int i = 0;
+                while (val == NULL) {
+                    if (i++ > maxTries) throw new TimeoutException("Max tries [" + maxTries + "] reached");
+                    val = getVersioned(config);
+                }
+            }
+            return val.value();
         }
 
         private <E extends Exception> Versioned<T> getVersioned(Locks.ExceptionConfig<E> config) throws E {
-            final Versioned<T> prev = ref;
+            Versioned<T> prev = ref;
             if (prev.version() == CREATED) return prev;
             else {
                 if (prev == NULL && VALUE.compareAndSet(this, NULL, CREATING)) {
                     T res = builder.get();
-                    onCreated(res);
-                    Versioned<T> v = new Versioned<>(CREATED, res);
-                    ref = v;
-                    return v;
-                } else return spinner.spin(config);
+                    prev = new Versioned<>(CREATED, res);
+                    ref = prev;
+                    return prev;
+                } else return timeoutSpin(config);
             }
         }
 
-        public static class OfInt implements IntSupplier {
-
-            static final ValState NULL = new ValState(0, NULL_PHASE);
-            static final ValState CREATING = new ValState(0, CREATING_PHASE);
-
-            @FunctionalInterface
-            private interface IntSpinner {
-                ValState spin();
-                default  <E extends Exception> ValState spin(Locks.ExceptionConfig<E> timeoutConfig) throws E { return null;}
-            }
-
-
-            final Locks.ExceptionConfig<RuntimeException> timeoutParams;
-            final IntSpinner spinner;
-
-            private RuntimeException throwRuntimeException(long totalTimeNanos) {
-                return LazyHolder.throwRuntimeException(es, holderConfig, totalTimeNanos);
-            }
-
-            private<E extends Exception> E throwRuntimeException(Locks.ExceptionConfig<E> config, long totalTimeNanos) {
-                return LazyHolder.throwRuntimeException(es, config, totalTimeNanos);
-            }
-
-            final class TimeOut implements IntSpinner {
-
-                @Override
-                public ValState spin() {
-                    ValState load = ref;
-                    Locks.Config config = timeoutParams.config;
-
-                    long currentNanoTime = System.nanoTime();
-                    long totalTimeNanos = config.totalNanos;
-
-                    final long end = currentNanoTime + totalTimeNanos;
-                    final long maxWaitNanos = config.maxWaitNanos;      // Cap max wait to a fraction of total time
-
-                    final double backOffFactor = config.backOffFactor;
-
-                    long waitTime = config.initialWaitNanos; // Start with a small initial wait time
-
-                    boolean limitReached = false;
-
-                    while (
-                            currentNanoTime < (end - waitTime)
-                                    &&
-                                    load == CREATING
-                    ) {
-                        long currentNano = System.nanoTime();
-                        final long curr_end = currentNano + waitTime;
-                        while (currentNano < curr_end) {
-                            LockSupport.parkNanos(curr_end - currentNano);
-                            currentNano = System.nanoTime();
-                        }
-
-                        waitTime = (long)(waitTime * backOffFactor);
-                        if (waitTime >= maxWaitNanos) {
-                            limitReached = true;
-                            break;
-                        }
-
-                        currentNanoTime = System.nanoTime();
-                        load = ref;
-                    }
-
-                    if (limitReached) {
-                        final long steadyEnd = end - maxWaitNanos;
-                        while (
-                                currentNanoTime < steadyEnd
-                                        &&
-                                        load == CREATING
-                        ) {
-                            long currentNano = System.nanoTime();
-                            final long curr_end = currentNano + maxWaitNanos;
-                            while (currentNano < curr_end) {
-                                LockSupport.parkNanos(curr_end - currentNano);
-                                currentNano = System.nanoTime();
-                            }
-
-                            currentNanoTime = System.nanoTime();
-                            load = ref;
-                        }
-                    }
-
-                    // Final precise waiting phase
-                    if (load == CREATING) {
-                        long currentNano = System.nanoTime();
-                        while (currentNano < end) {
-                            LockSupport.parkNanos(end - currentNano);
-                            currentNano = System.nanoTime();
-                        }
-
-                        load = ref;
-                        if (load != CREATING) return load;
-                        else {
-                            throw throwRuntimeException(timeoutParams, totalTimeNanos);
-                        }
-                    } else return load;
-                }
-
-                @Override
-                public <E extends Exception> ValState spin(Locks.ExceptionConfig<E> timeoutConfig) throws E {
-                    ValState load = ref;
-                    Locks.Config config = timeoutConfig.config;
-
-                    long currentNanoTime = System.nanoTime();
-                    long totalTimeNanos = config.totalNanos;
-
-                    final long end = currentNanoTime + totalTimeNanos;
-                    final long maxWaitNanos = config.maxWaitNanos;      // Cap max wait to a fraction of total time
-
-                    final double backOffFactor = config.backOffFactor;
-
-                    long waitTime = config.initialWaitNanos; // Start with a small initial wait time
-
-                    boolean limitReached = false;
-
-                    while (
-                            currentNanoTime < (end - waitTime)
-                                    &&
-                                    load == CREATING
-                    ) {
-                        long currentNano = System.nanoTime();
-                        final long curr_end = currentNano + waitTime;
-                        while (currentNano < curr_end) {
-                            LockSupport.parkNanos(curr_end - currentNano);
-                            currentNano = System.nanoTime();
-                        }
-
-                        waitTime = (long)(waitTime * backOffFactor);
-                        if (waitTime >= maxWaitNanos) {
-                            limitReached = true;
-                            break;
-                        }
-
-                        currentNanoTime = System.nanoTime();
-                        load = ref;
-                    }
-
-                    if (limitReached) {
-                        final long steadyEnd = end - maxWaitNanos;
-                        while (
-                                currentNanoTime < steadyEnd
-                                        &&
-                                        load == CREATING
-                        ) {
-                            long currentNano = System.nanoTime();
-                            final long curr_end = currentNano + maxWaitNanos;
-                            while (currentNano < curr_end) {
-                                LockSupport.parkNanos(curr_end - currentNano);
-                                currentNano = System.nanoTime();
-                            }
-
-                            currentNanoTime = System.nanoTime();
-                            load = ref;
-                        }
-                    }
-
-                    // Final precise waiting phase
-                    if (load == CREATING) {
-                        long currentNano = System.nanoTime();
-                        while (currentNano < end) {
-                            LockSupport.parkNanos(end - currentNano);
-                            currentNano = System.nanoTime();
-                        }
-
-                        load = ref;
-                        if (load != CREATING) return load;
-                        else {
-                            throw throwRuntimeException(timeoutConfig, totalTimeNanos);
-                        }
-                    } else return load;
-                }
-            }
-
-            final class Unbridled implements IntSpinner {
-
-                @Override
-                public ValState spin() {
-                    ValState prev;
-                    prev = ref;
-                    while (prev.state < CREATED) { prev = ref; }
+        private Versioned<T> getVersioned() {
+            Versioned<T> prev = ref;
+            if (prev.version() == CREATED) return prev;
+            else {
+                if (prev == NULL && VALUE.compareAndSet(this, NULL, CREATING)) {
+                    T res = builder.get();
+                    prev = new Versioned<>(CREATED, res);
+                    ref = prev;
                     return prev;
+                } else return spinner.spin();
+            }
+        }
+
+        @Override
+        public <E extends Exception> T get(Locks.ExceptionConfig<E> config) throws E {
+            return getVersioned(config).value();
+        }
+
+    }
+
+    private static void maxTriesException(int maxTries) {
+        if (maxTries == 0 || maxTries == Integer.MAX_VALUE) throw new IllegalStateException("Invalid retries");
+    }
+
+    public static final class OfInt implements OfIntSupplier {
+
+        static final ValState NULL = new ValState(0, NULL_PHASE);
+        static final ValState CREATING = new ValState(0, CREATING_PHASE);
+
+        @FunctionalInterface
+        private interface IntSpinner {
+            ValState spin();
+        }
+
+        private <E extends Exception> ValState timeoutSpin(Locks.ExceptionConfig<E> timeoutConfig) throws E {
+            ValState load = ref;
+
+            if (timeoutConfig.config.isUnbridled()) {
+                while (load == CREATING) { load = ref; }
+                return load;
+            } else {
+                Locks.Config config = timeoutConfig.config;
+
+                long currentNanoTime = System.nanoTime();
+                long totalTimeNanos = config.totalNanos;
+
+                final long end = currentNanoTime + totalTimeNanos;
+                final long maxWaitNanos = config.maxWaitNanos;      // Cap max wait to a fraction of total time
+
+                final double backOffFactor = config.backOffFactor;
+
+                long waitTime = config.initialWaitNanos; // Start with a small initial wait time
+
+                boolean limitReached = false;
+
+                while (
+                        currentNanoTime < (end - waitTime)
+                                &&
+                                load == CREATING
+                ) {
+                    long currentNano = System.nanoTime();
+                    final long curr_end = currentNano + waitTime;
+                    while (currentNano < curr_end) {
+                        LockSupport.parkNanos(curr_end - currentNano);
+                        currentNano = System.nanoTime();
+                    }
+
+                    waitTime = (long)(waitTime * backOffFactor);
+                    if (waitTime >= maxWaitNanos) {
+                        limitReached = true;
+                        break;
+                    }
+
+                    currentNanoTime = System.nanoTime();
+                    load = ref;
                 }
 
-                @Override
-                public <E extends Exception> ValState spin(Locks.ExceptionConfig<E> timeoutConfig) throws E {
-                    ValState load = ref;
-                    Locks.Config config = timeoutConfig.config;
-
-                    long currentNanoTime = System.nanoTime();
-                    long totalTimeNanos = config.totalNanos;
-
-                    final long end = currentNanoTime + totalTimeNanos;
-                    final long maxWaitNanos = config.maxWaitNanos;      // Cap max wait to a fraction of total time
-
-                    final double backOffFactor = config.backOffFactor;
-
-                    long waitTime = config.initialWaitNanos; // Start with a small initial wait time
-
-                    boolean limitReached = false;
-
+                if (limitReached) {
+                    final long steadyEnd = end - maxWaitNanos;
                     while (
-                            currentNanoTime < (end - waitTime)
+                            currentNanoTime < steadyEnd
                                     &&
                                     load == CREATING
                     ) {
                         long currentNano = System.nanoTime();
-                        final long curr_end = currentNano + waitTime;
+                        final long curr_end = currentNano + maxWaitNanos;
                         while (currentNano < curr_end) {
                             LockSupport.parkNanos(curr_end - currentNano);
                             currentNano = System.nanoTime();
                         }
 
-                        waitTime = (long)(waitTime * backOffFactor);
-                        if (waitTime >= maxWaitNanos) {
-                            limitReached = true;
-                            break;
-                        }
-
                         currentNanoTime = System.nanoTime();
                         load = ref;
                     }
+                }
 
-                    if (limitReached) {
-                        final long steadyEnd = end - maxWaitNanos;
-                        while (
-                                currentNanoTime < steadyEnd
-                                        &&
-                                        load == CREATING
-                        ) {
-                            long currentNano = System.nanoTime();
-                            final long curr_end = currentNano + maxWaitNanos;
-                            while (currentNano < curr_end) {
-                                LockSupport.parkNanos(curr_end - currentNano);
-                                currentNano = System.nanoTime();
-                            }
-
-                            currentNanoTime = System.nanoTime();
-                            load = ref;
-                        }
+                // Final precise waiting phase
+                if (load == CREATING) {
+                    long currentNano = System.nanoTime();
+                    while (currentNano < end) {
+                        LockSupport.parkNanos(end - currentNano);
+                        currentNano = System.nanoTime();
                     }
 
-                    // Final precise waiting phase
-                    if (load == CREATING) {
-                        long currentNano = System.nanoTime();
-                        while (currentNano < end) {
-                            LockSupport.parkNanos(end - currentNano);
-                            currentNano = System.nanoTime();
-                        }
-                        load = ref;
-                        if (load != CREATING) return load;
-                        else {
-                            throw LazyHolder.throwRuntimeException(es, timeoutConfig, totalTimeNanos);
-                        }
-                    } else return load;
-                }
+                    load = ref;
+                    if (load != CREATING) return load;
+                    else {
+                        throw throwRuntimeException(timeoutConfig, totalTimeNanos);
+                    }
+                } else return load;
             }
+        }
 
+        final Locks.ExceptionConfig<RuntimeException> timeoutParams;
+        final IntSpinner spinner;
 
-            private final IntSupplier builder;
+        private RuntimeException throwRuntimeException(long totalTimeNanos) {
+            return LazyHolder.throwRuntimeException(es, holderConfig, totalTimeNanos);
+        }
 
-            volatile ValState ref = NULL;
-            private static final VarHandle REF;
-            final StackTraceElement[] es;
+        private<E extends Exception> E throwRuntimeException(Locks.ExceptionConfig<E> config, long totalTimeNanos) {
+            return LazyHolder.throwRuntimeException(es, config, totalTimeNanos);
+        }
 
-            static {
-                try {
-                    REF = MethodHandles.lookup().findVarHandle(OfInt.class, "ref", ValState.class);
-                } catch (NoSuchFieldException | IllegalAccessException e) {
-                    throw new ExceptionInInitializerError(e);
-                }
-            }
-
-            public static OfInt getNew(IntSupplier supplier) {
-                return supplier instanceof OfInt oi ? oi : new OfInt(supplier);
-            }
-
-            OfInt(IntSupplier builder) {
-                this(FINAL_CONFIG.ref, builder);
-            }
-
-            public OfInt(Locks.ExceptionConfig<RuntimeException> timeoutParams, IntSupplier builder) {
-                this.builder = builder;
-                if (DEBUG.ref) {
-                    es = Thread.currentThread().getStackTrace();
-                } else es = null;
-                this.timeoutParams = timeoutParams;
-                this.spinner = timeoutParams.config.isUnbridled() ? new Unbridled() : new TimeOut();
-            }
-
-            public OfInt(Consumer<Locks.Config.Builder> paramsBuilder, IntSupplier builder) {
-                this.builder = builder;
-                if (DEBUG.ref) {
-                    es = Thread.currentThread().getStackTrace();
-                } else es = null;
-                final Locks.Config.Builder b = new Locks.Config.Builder(LazyHolder.holderConfig.config);
-                paramsBuilder.accept(b);
-                this.timeoutParams = Locks.ExceptionConfig.runtime(b);
-                this.spinner = timeoutParams.config.isUnbridled() ? new Unbridled() : new TimeOut();
-            }
-
-            record ValState(int val, int state){}
+        final class TimeOut implements IntSpinner {
 
             @Override
-            public final int getAsInt() {
-                final ValState prev = ref;
-                if (prev.state == CREATED) return prev.val;
-                else {
-                    if (prev == NULL && REF.compareAndSet(this, NULL, CREATING)) {
-                        int res = builder.getAsInt();
-                        onCreated(res);
-                        ref = new ValState(res, CREATED);
-                        return res;
-                    } else return spinner.spin().val;
-                }
-            }
+            public ValState spin() {
+                ValState load = ref;
+                Locks.Config config = timeoutParams.config;
 
-            public final<E extends Exception> int getAsInt(Locks.ExceptionConfig<E> config) throws E {
-                final ValState prev = ref;
-                if (prev.state == CREATED) return prev.val;
-                else {
-                    if (prev == NULL && REF.compareAndSet(this, NULL, CREATING)) {
-                        int res = builder.getAsInt();
-                        onCreated(res);
-                        ref = new ValState(res, CREATED);
-                        return res;
-                    } else return spinner.spin(config).val;
-                }
-            }
+                long currentNanoTime = System.nanoTime();
+                long totalTimeNanos = config.totalNanos;
 
-            private final AtomicInteger clearingVer = new AtomicInteger();
+                final long end = currentNanoTime + totalTimeNanos;
+                final long maxWaitNanos = config.maxWaitNanos;      // Cap max wait to a fraction of total time
 
-            /**
-             * @return null if the inner value was null or was already cleared
-             * */
-            public final int getAndClear() {
-                int c_ver = clearingVer.incrementAndGet();
-                final ValState prev = ref;
-                int ver = prev.state;
+                final double backOffFactor = config.backOffFactor;
 
-                return switch (ver) {
-                    case CREATED -> (c_ver == clearingVer.getOpaque() && REF.compareAndSet(this, prev, NULL)) ? prev.val : 0;
-                    case NULL_PHASE -> 0;
-                    case CREATING_PHASE -> {
-                        // doing an adaptive erasing is less computationally expensive than creating a
-                        // "notificating"-like mechanic on the `get` side.
-                        // We would be adding a flag check on every `get` application... just to reduce the destruction
-                        // waiting phase by ~17 millis (on an advanced waiting time).
-                        // Anyway this phase will be a rare occurrence.... only on REAL contention
-                        // scenarios where the store has not been performed yet.
-                        ValState load = ref;
+                long waitTime = config.initialWaitNanos; // Start with a small initial wait time
 
-                        if (load != prev) { // may have been (finally) created... or destroyed
-                            if (load.state == CREATED) {
-                                if (REF.compareAndSet(this, load, NULL)) { // destroy.
-                                    yield load.val;
-                                } else yield 0;
-                            }
-                            else {
-                                assert load == NULL;
-                                yield 0;
-                            }
-                        }
+                boolean limitReached = false;
 
-                        Locks.Config config = timeoutParams.config;
-
-                        long totalTimeNanos = config.totalNanos;
-                        long currentNanoTime = System.nanoTime();
-
-                        final long end = currentNanoTime + totalTimeNanos;
-                        final long maxWaitNanos = config.maxWaitNanos;      // Cap max wait to a fraction of total time
-
-                        final double backOffFactor = config.backOffFactor;
-                        long waitTime = config.initialWaitNanos; // Start with a small initial wait time
-
-                        boolean limitReached = false;
-
-                        while (
-                                currentNanoTime < (end - waitTime)
-                                        &&
-                                        load == CREATING
-                        ) {
-                            long currentNano = System.nanoTime();
-                            final long curr_end = currentNano + waitTime;
-                            while (currentNano < curr_end) {
-                                LockSupport.parkNanos(curr_end - currentNano);
-                                currentNano = System.nanoTime();
-                            }
-
-                            waitTime = (long)(waitTime * backOffFactor);
-                            if (waitTime >= maxWaitNanos) {
-                                limitReached = true;
-                                break;
-                            }
-
-                            currentNanoTime = System.nanoTime();
-                            load = ref;
-                        }
-
-                        if (limitReached) {
-                            final long steadyEnd = end - maxWaitNanos;
-                            while (
-                                    currentNanoTime < steadyEnd
-                                            &&
-                                            load == CREATING
-                            ) {
-                                long currentNano = System.nanoTime();
-                                final long curr_end = currentNano + maxWaitNanos;
-                                while (currentNano < curr_end) {
-                                    LockSupport.parkNanos(curr_end - currentNano);
-                                    currentNano = System.nanoTime();
-                                }
-
-                                currentNanoTime = System.nanoTime();
-                                load = ref;
-                            }
-                        }
-
-                        // Final precise waiting phase
-                        if (load == CREATING) {
-                            long currentNano = System.nanoTime();
-
-                            while (currentNano < end) {
-                                LockSupport.parkNanos(end - currentNano);
-                                currentNano = System.nanoTime();
-                            }
-                            load = ref;
-                            if (load != CREATING) {
-                                if (
-                                        load.state == CREATED
-                                                && c_ver == clearingVer.getOpaque()
-                                                && REF.compareAndSet(this, load, NULL)
-                                ) yield load.val;
-                                else yield 0;
-                            }
-                            else throw throwRuntimeException(totalTimeNanos);
-
-                        } else {
-                            if (
-                                    load.state == CREATED // was created!
-                                            && c_ver == clearingVer.getOpaque()
-                                            && REF.compareAndSet(this, load, NULL)
-                            ) {
-                                yield load.val;
-
-                            } else yield 0;
-                        }
+                while (
+                        currentNanoTime < (end - waitTime)
+                                &&
+                                load == CREATING
+                ) {
+                    long currentNano = System.nanoTime();
+                    final long curr_end = currentNano + waitTime;
+                    while (currentNano < curr_end) {
+                        LockSupport.parkNanos(curr_end - currentNano);
+                        currentNano = System.nanoTime();
                     }
-                    default -> throw new IllegalStateException("Unexpected value: " + ver);
-                };
-            }
 
-            public <E extends Exception> int getAndClear(final Locks.ExceptionConfig<E> timeoutConfig) throws E {
-                int c_ver = clearingVer.incrementAndGet();
-                final ValState prev = ref;
-                int ver = prev.state;
-
-                return switch (ver) {
-                    case CREATED -> (c_ver == clearingVer.getOpaque() && REF.compareAndSet(this, prev, NULL)) ? prev.val : 0;
-                    case NULL_PHASE -> 0;
-                    case CREATING_PHASE -> {
-                        // doing an adaptive erasing is less computationally expensive than creating a
-                        // "notificating"-like mechanic on the `get` side.
-                        // We would be adding a flag check on every `get` application... just to reduce the destruction
-                        // waiting phase by ~17 millis (on an advanced waiting time).
-                        // Anyway this phase will be a rare occurrence.... only on REAL contention
-                        // scenarios where the store has not been performed yet.
-                        ValState load = ref;
-
-                        if (load != prev) { // may have been (finally) created... or destroyed
-                            if (load.state == CREATED) {
-                                if (REF.compareAndSet(this, load, NULL)) { // destroy.
-                                    yield load.val;
-                                } else yield 0;
-                            }
-                            else {
-                                assert load == NULL;
-                                yield 0;
-                            }
-                        }
-
-                        Locks.Config config = timeoutConfig.config;
-
-                        long totalTimeNanos = config.totalNanos;
-                        long currentNanoTime = System.nanoTime();
-
-                        final long end = currentNanoTime + totalTimeNanos;
-                        final long maxWaitNanos = config.maxWaitNanos;      // Cap max wait to a fraction of total time
-
-                        final double backOffFactor = config.backOffFactor;
-                        long waitTime = config.initialWaitNanos; // Start with a small initial wait time
-
-                        boolean limitReached = false;
-
-                        while (
-                                currentNanoTime < (end - waitTime)
-                                        &&
-                                        load == CREATING
-                        ) {
-                            long currentNano = System.nanoTime();
-                            final long curr_end = currentNano + waitTime;
-                            while (currentNano < curr_end) {
-                                LockSupport.parkNanos(curr_end - currentNano);
-                                currentNano = System.nanoTime();
-                            }
-
-                            waitTime = (long)(waitTime * backOffFactor);
-                            if (waitTime >= maxWaitNanos) {
-                                limitReached = true;
-                                break;
-                            }
-
-                            currentNanoTime = System.nanoTime();
-                            load = ref;
-                        }
-
-                        if (limitReached) {
-                            final long steadyEnd = end - maxWaitNanos;
-                            while (
-                                    currentNanoTime < steadyEnd
-                                            &&
-                                            load == CREATING
-                            ) {
-                                long currentNano = System.nanoTime();
-                                final long curr_end = currentNano + maxWaitNanos;
-                                while (currentNano < curr_end) {
-                                    LockSupport.parkNanos(curr_end - currentNano);
-                                    currentNano = System.nanoTime();
-                                }
-
-                                currentNanoTime = System.nanoTime();
-                                load = ref;
-                            }
-                        }
-
-                        // Final precise waiting phase
-                        if (load == CREATING) {
-                            long currentNano = System.nanoTime();
-
-                            while (currentNano < end) {
-                                LockSupport.parkNanos(end - currentNano);
-                                currentNano = System.nanoTime();
-                            }
-                            load = ref;
-                            if (load != CREATING) {
-                                if (
-                                        load.state == CREATED
-                                                && c_ver == clearingVer.getOpaque()
-                                                && REF.compareAndSet(this, load, NULL)
-                                ) yield load.val;
-                                else yield 0;
-                            }
-                            else throw throwRuntimeException(timeoutConfig, totalTimeNanos);
-
-                        } else {
-                            if (
-                                    load.state == CREATED // was created!
-                                            && c_ver == clearingVer.getOpaque()
-                                            && REF.compareAndSet(this, load, NULL)
-                            ) {
-                                yield load.val;
-
-                            } else yield 0;
-                        }
+                    waitTime = (long)(waitTime * backOffFactor);
+                    if (waitTime >= maxWaitNanos) {
+                        limitReached = true;
+                        break;
                     }
-                    default -> throw new IllegalStateException("Unexpected value: " + ver);
-                };
-            }
 
-            /**
-             * @return true if the {@code expect}-ed value matched the inner value.
-             * @param expect the expected value that will allow the reference clearing.
-             * */
-            public final boolean clear(int expect) {
-                ValState prev = ref;
-                return
-                        (prev.val == expect)
-                                && REF.compareAndSet(this, prev, NULL);
-            }
-
-            protected void onCreated(int i){}
-
-            public final <E extends Exception> int get(Locks.ExceptionConfig<E> config) throws E {
-                return getState(config).val;
-            }
-
-            private <E extends Exception> ValState getState(Locks.ExceptionConfig<E> config) throws E {
-                final ValState prev = ref;
-                if (prev.state == CREATED) return prev;
-                else {
-                    if (prev == NULL && REF.compareAndSet(this, NULL, CREATING)) {
-                        int res = builder.getAsInt();
-                        onCreated(res);
-                        ValState v = new ValState(res, CREATED);
-                        ref = v;
-                        return v;
-                    } else return spinner.spin(config);
+                    currentNanoTime = System.nanoTime();
+                    load = ref;
                 }
-            }
 
-            /**
-             * Will force a re-application of {@link #get()} if the value
-             * was lost during creation phase to any one call of
-             * {@link #clear(Object)} or {@link #getAndClear()}
-             * One waiting period will consume one fresh Timeout parameter.
-             * No assurances are given if a waiting period misses a destruction,
-             * in which case both creating phases will be subjected to the same Timeout parameter.
-             * The Timeout parameter will be refreshed each retry.
-             * */
-            public final int reviveGet(int maxTries) throws TimeoutException {
-                return reviveGet(timeoutParams, maxTries);
-            }
+                if (limitReached) {
+                    final long steadyEnd = end - maxWaitNanos;
+                    while (
+                            currentNanoTime < steadyEnd
+                                    &&
+                                    load == CREATING
+                    ) {
+                        long currentNano = System.nanoTime();
+                        final long curr_end = currentNano + maxWaitNanos;
+                        while (currentNano < curr_end) {
+                            LockSupport.parkNanos(curr_end - currentNano);
+                            currentNano = System.nanoTime();
+                        }
 
-            public final<E extends Exception> int reviveGet(Locks.ExceptionConfig<E> config, int maxTries) throws TimeoutException, E {
-                if (maxTries == 0) throw new IllegalStateException("Invalid retries");
-                ValState val = getState(config);
-                if (maxTries == Integer.MAX_VALUE) {
-                    while (val == NULL) { val = getState(config); }
-                } else {
-                    int i = 0;
-                    while (val == null) {
-                        if (i++ > maxTries) throw new TimeoutException("Max tries [" + maxTries + "] reached");
-                        val = getState(config);
+                        currentNanoTime = System.nanoTime();
+                        load = ref;
                     }
                 }
-                return val.val;
+
+                // Final precise waiting phase
+                if (load == CREATING) {
+                    long currentNano = System.nanoTime();
+                    while (currentNano < end) {
+                        LockSupport.parkNanos(end - currentNano);
+                        currentNano = System.nanoTime();
+                    }
+
+                    load = ref;
+                    if (load != CREATING) return load;
+                    else {
+                        throw throwRuntimeException(timeoutParams, totalTimeNanos);
+                    }
+                } else return load;
             }
         }
+
+        final class Unbridled implements IntSpinner {
+
+            @Override
+            public ValState spin() {
+                ValState prev;
+                prev = ref;
+                while (prev == CREATING) { prev = ref; }
+                return prev;
+            }
+        }
+
+        private final IntSupplier builder;
+
+        volatile ValState ref = NULL;
+        private static final VarHandle REF;
+        final StackTraceElement[] es;
+
+        static {
+            try {
+                REF = MethodHandles.lookup().findVarHandle(OfInt.class, "ref", ValState.class);
+            } catch (NoSuchFieldException | IllegalAccessException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+
+        public static OfInt getNew(IntSupplier supplier) {
+            return supplier instanceof OfInt oi ? oi : new OfInt(supplier);
+        }
+
+        OfInt(IntSupplier builder) { this(FINAL_CONFIG.ref, builder); }
+
+        public OfInt(Locks.ExceptionConfig<RuntimeException> timeoutParams, IntSupplier builder) {
+            this.builder = builder;
+            if (DEBUG.ref) {
+                es = Thread.currentThread().getStackTrace();
+            } else es = null;
+            this.timeoutParams = timeoutParams;
+            this.spinner = timeoutParams.config.isUnbridled() ? new Unbridled() : new TimeOut();
+        }
+
+        public OfInt(Consumer<Locks.Config.Builder> paramsBuilder, IntSupplier builder) {
+            this.builder = builder;
+            if (DEBUG.ref) {
+                es = Thread.currentThread().getStackTrace();
+            } else es = null;
+            final Locks.Config.Builder b = new Locks.Config.Builder(LazyHolder.holderConfig.config);
+            paramsBuilder.accept(b);
+            this.timeoutParams = Locks.ExceptionConfig.runtime(b);
+            this.spinner = timeoutParams.config.isUnbridled() ? new Unbridled() : new TimeOut();
+        }
+
+        record ValState(int val, int state){}
+
+        @Override
+        public int getAsInt() {
+            final ValState prev = ref;
+            if (prev.state == CREATED) return prev.val;
+            else {
+                if (prev == NULL && REF.compareAndSet(this, NULL, CREATING)) {
+                    int res = builder.getAsInt();
+                    ref = new ValState(res, CREATED);
+                    return res;
+                } else return spinner.spin().val;
+            }
+        }
+
+        @Override
+        public <E extends Exception> int getAsInt(Locks.ExceptionConfig<E> config) throws E {
+            return getState(config).val;
+        }
+
+        private final AtomicInteger clearingVer = new AtomicInteger();
+
+        /**
+         * @return null if the inner value was null or was already cleared
+         * */
+        @Override
+        public int getAndClear() {
+            int c_ver = clearingVer.incrementAndGet();
+            final ValState prev = ref;
+            int ver = prev.state;
+
+            return switch (ver) {
+                case CREATED -> (c_ver == clearingVer.getOpaque() && REF.compareAndSet(this, prev, NULL)) ? prev.val : 0;
+                case NULL_PHASE -> 0;
+                case CREATING_PHASE -> {
+                    // doing an adaptive erasing is less computationally expensive than creating a
+                    // "notificating"-like mechanic on the `get` side.
+                    // We would be adding a flag check on every `get` application... just to reduce the destruction
+                    // waiting phase by ~17 millis (on an advanced waiting time).
+                    // Anyway this phase will be a rare occurrence.... only on REAL contention
+                    // scenarios where the store has not been performed yet.
+                    ValState load = ref;
+
+                    if (load != prev) { // may have been (finally) created... or destroyed
+                        if (load.state == CREATED) {
+                            if (REF.compareAndSet(this, load, NULL)) { // destroy.
+                                yield load.val;
+                            } else yield 0;
+                        }
+                        else {
+                            assert load == NULL;
+                            yield 0;
+                        }
+                    }
+
+                    Locks.Config config = timeoutParams.config;
+
+                    long totalTimeNanos = config.totalNanos;
+                    long currentNanoTime = System.nanoTime();
+
+                    final long end = currentNanoTime + totalTimeNanos;
+                    final long maxWaitNanos = config.maxWaitNanos;      // Cap max wait to a fraction of total time
+
+                    final double backOffFactor = config.backOffFactor;
+                    long waitTime = config.initialWaitNanos; // Start with a small initial wait time
+
+                    boolean limitReached = false;
+
+                    while (
+                            currentNanoTime < (end - waitTime)
+                                    &&
+                                    load == CREATING
+                    ) {
+                        long currentNano = System.nanoTime();
+                        final long curr_end = currentNano + waitTime;
+                        while (currentNano < curr_end) {
+                            LockSupport.parkNanos(curr_end - currentNano);
+                            currentNano = System.nanoTime();
+                        }
+
+                        waitTime = (long)(waitTime * backOffFactor);
+                        if (waitTime >= maxWaitNanos) {
+                            limitReached = true;
+                            break;
+                        }
+
+                        currentNanoTime = System.nanoTime();
+                        load = ref;
+                    }
+
+                    if (limitReached) {
+                        final long steadyEnd = end - maxWaitNanos;
+                        while (
+                                currentNanoTime < steadyEnd
+                                        &&
+                                        load == CREATING
+                        ) {
+                            long currentNano = System.nanoTime();
+                            final long curr_end = currentNano + maxWaitNanos;
+                            while (currentNano < curr_end) {
+                                LockSupport.parkNanos(curr_end - currentNano);
+                                currentNano = System.nanoTime();
+                            }
+
+                            currentNanoTime = System.nanoTime();
+                            load = ref;
+                        }
+                    }
+
+                    // Final precise waiting phase
+                    if (load == CREATING) {
+                        long currentNano = System.nanoTime();
+
+                        while (currentNano < end) {
+                            LockSupport.parkNanos(end - currentNano);
+                            currentNano = System.nanoTime();
+                        }
+                        load = ref;
+                        if (load != CREATING) {
+                            if (
+                                    load.state == CREATED
+                                            && c_ver == clearingVer.getOpaque()
+                                            && REF.compareAndSet(this, load, NULL)
+                            ) yield load.val;
+                            else yield 0;
+                        }
+                        else throw throwRuntimeException(totalTimeNanos);
+
+                    } else {
+                        if (
+                                load.state == CREATED // was created!
+                                        && c_ver == clearingVer.getOpaque()
+                                        && REF.compareAndSet(this, load, NULL)
+                        ) {
+                            yield load.val;
+
+                        } else yield 0;
+                    }
+                }
+                default -> throw new IllegalStateException("Unexpected value: " + ver);
+            };
+        }
+
+        @Override
+        public <E extends Exception> int getAndClear(final Locks.ExceptionConfig<E> timeoutConfig) throws E {
+            int c_ver = clearingVer.incrementAndGet();
+            final ValState prev = ref;
+            int ver = prev.state;
+
+            return switch (ver) {
+                case CREATED -> (c_ver == clearingVer.getOpaque() && REF.compareAndSet(this, prev, NULL)) ? prev.val : 0;
+                case NULL_PHASE -> 0;
+                case CREATING_PHASE -> {
+                    // doing an adaptive erasing is less computationally expensive than creating a
+                    // "notificating"-like mechanic on the `get` side.
+                    // We would be adding a flag check on every `get` application... just to reduce the destruction
+                    // waiting phase by ~17 millis (on an advanced waiting time).
+                    // Anyway this phase will be a rare occurrence.... only on REAL contention
+                    // scenarios where the store has not been performed yet.
+                    ValState load = ref;
+
+                    if (load != prev) { // may have been (finally) created... or destroyed
+                        if (load.state == CREATED) {
+                            if (REF.compareAndSet(this, load, NULL)) { // destroy.
+                                yield load.val;
+                            } else yield 0;
+                        }
+                        else {
+                            assert load == NULL;
+                            yield 0;
+                        }
+                    }
+
+                    Locks.Config config = timeoutConfig.config;
+
+                    long totalTimeNanos = config.totalNanos;
+                    long currentNanoTime = System.nanoTime();
+
+                    final long end = currentNanoTime + totalTimeNanos;
+                    final long maxWaitNanos = config.maxWaitNanos;      // Cap max wait to a fraction of total time
+
+                    final double backOffFactor = config.backOffFactor;
+                    long waitTime = config.initialWaitNanos; // Start with a small initial wait time
+
+                    boolean limitReached = false;
+
+                    while (
+                            currentNanoTime < (end - waitTime)
+                                    &&
+                                    load == CREATING
+                    ) {
+                        long currentNano = System.nanoTime();
+                        final long curr_end = currentNano + waitTime;
+                        while (currentNano < curr_end) {
+                            LockSupport.parkNanos(curr_end - currentNano);
+                            currentNano = System.nanoTime();
+                        }
+
+                        waitTime = (long)(waitTime * backOffFactor);
+                        if (waitTime >= maxWaitNanos) {
+                            limitReached = true;
+                            break;
+                        }
+
+                        currentNanoTime = System.nanoTime();
+                        load = ref;
+                    }
+
+                    if (limitReached) {
+                        final long steadyEnd = end - maxWaitNanos;
+                        while (
+                                currentNanoTime < steadyEnd
+                                        &&
+                                        load == CREATING
+                        ) {
+                            long currentNano = System.nanoTime();
+                            final long curr_end = currentNano + maxWaitNanos;
+                            while (currentNano < curr_end) {
+                                LockSupport.parkNanos(curr_end - currentNano);
+                                currentNano = System.nanoTime();
+                            }
+
+                            currentNanoTime = System.nanoTime();
+                            load = ref;
+                        }
+                    }
+
+                    // Final precise waiting phase
+                    if (load == CREATING) {
+                        long currentNano = System.nanoTime();
+
+                        while (currentNano < end) {
+                            LockSupport.parkNanos(end - currentNano);
+                            currentNano = System.nanoTime();
+                        }
+                        load = ref;
+                        if (load != CREATING) {
+                            if (
+                                    load.state == CREATED
+                                            && c_ver == clearingVer.getOpaque()
+                                            && REF.compareAndSet(this, load, NULL)
+                            ) yield load.val;
+                            else yield 0;
+                        }
+                        else throw throwRuntimeException(timeoutConfig, totalTimeNanos);
+                    } else {
+                        if (
+                                load.state == CREATED // was created!
+                                        && c_ver == clearingVer.getOpaque()
+                                        && REF.compareAndSet(this, load, NULL)
+                        ) {
+                            yield load.val;
+
+                        } else yield 0;
+                    }
+                }
+                default -> throw new IllegalStateException("Unexpected value: " + ver);
+            };
+        }
+
+        /**
+         * @return true if the {@code expect}-ed value matched the inner value.
+         * @param expect the expected value that will allow the reference clearing.
+         * */
+        @Override
+        public boolean clear(int expect) {
+            ValState prev = ref;
+            return
+                    (prev.val == expect)
+                            && REF.compareAndSet(this, prev, NULL);
+        }
+
+        private <E extends Exception> ValState getState(Locks.ExceptionConfig<E> config) throws E {
+            ValState prev = ref;
+            if (prev.state == CREATED) return prev;
+            else {
+                if (prev == NULL && REF.compareAndSet(this, NULL, CREATING)) {
+                    prev = new ValState(builder.getAsInt(), CREATED);
+                    ref = prev;
+                    return prev;
+                } else return timeoutSpin(config);
+            }
+        }
+
+        private <E extends Exception> ValState getState() throws E {
+            ValState prev = ref;
+            if (prev.state == CREATED) return prev;
+            else {
+                if (prev == NULL && REF.compareAndSet(this, NULL, CREATING)) {
+                    prev = new ValState(builder.getAsInt(), CREATED);
+                    ref = prev;
+                    return prev;
+                } else return spinner.spin();
+            }
+        }
+
+        /**
+         * Will force a re-application of {@link #getAsInt()} if the value
+         * was lost during creation phase to any one call of
+         * {@link #clear(Object)} or {@link #getAndClear()}
+         * One waiting period will consume one fresh Timeout parameter.
+         * No assurances are given if a waiting period misses a destruction,
+         * in which case both creating phases will be subjected to the same Timeout parameter.
+         * The Timeout parameter will be refreshed each retry.
+         * */
+        @Override
+        public int reviveGet(int maxTries) throws TimeoutException {
+            if (maxTries == 0) throw new IllegalStateException("Invalid retries");
+            ValState val = getState();
+            if (maxTries == Integer.MAX_VALUE) {
+                while (val == NULL) { val = getState(); }
+            } else {
+                int i = 0;
+                while (val == null) {
+                    if (i++ > maxTries) throw new TimeoutException("Max tries [" + maxTries + "] reached");
+                    val = getState();
+                }
+            }
+            return val.val;
+        }
+
+        @Override
+        public <E extends Exception> int reviveGet(Locks.ExceptionConfig<E> config, int maxTries) throws TimeoutException, E {
+            if (maxTries == 0) throw new IllegalStateException("Invalid retries");
+            ValState val = getState(config);
+            if (maxTries == Integer.MAX_VALUE) {
+                while (val == NULL) { val = getState(config); }
+            } else {
+                int i = 0;
+                while (val == null) {
+                    if (i++ > maxTries) throw new TimeoutException("Max tries [" + maxTries + "] reached");
+                    val = getState(config);
+                }
+            }
+            return val.val;
+        }
     }
+
 
     /**
      * Will apply and store the result.
@@ -1412,8 +1315,8 @@ public class LazyHolder<T> {
      * <p> Lambdas are prone to false-positive memory-leaks by APIs like Leak-Cannary.
      * Anonymous classes prevent them.
      * */
-    public static class Function<S, T> extends LazyHolder<T>
-            implements java.util.function.Function<S, T> {
+    public static final class Function<S, T> extends LazyHolder<T>
+            implements LazyFunction<S, T> {
 
         private final java.util.function.Function<S, T> function;
 
@@ -1444,8 +1347,15 @@ public class LazyHolder<T> {
             return function instanceof LazyHolder.Function<T, U> lf ? lf : new Function<>(function);
         }
 
-        Function(java.util.function.Function<S, T> function) {
-            this(FINAL_CONFIG.ref, function);
+        Function(java.util.function.Function<S, T> function) { this(FINAL_CONFIG.ref, function); }
+
+        @Override
+        public T reviveApply(S s) {
+            Versioned<T> val = getVersioned(s);
+            if (val.version() != CREATED) {
+                while (val == NULL) { val = getVersioned(s); }
+            }
+            return val.value();
         }
 
         /**
@@ -1457,72 +1367,85 @@ public class LazyHolder<T> {
          * in which case both creating phases will be subjected to the same Timeout parameter.
          * The Timeout parameter will be refreshed each retry.
          * */
-        public final T reviveApply(S s, final int maxTries) throws TimeoutException {
-            return reviveApply(s, maxTries, timeoutParams);
-        }
-
-        public final<E extends Exception> T reviveApply(S s, final int maxTries, Locks.ExceptionConfig<E> config) throws TimeoutException, E {
-            if (maxTries == 0) throw new IllegalStateException("Invalid retries");
-
-            final Versioned<T> val = getVersioned(s, config);
-            if (val.version() == CREATED) return val.value();
-            else {
-                Versioned<T> reloaded = getVersioned(s, config);
-                if (maxTries == Integer.MAX_VALUE) {
-                    while (reloaded == NULL) { reloaded = getVersioned(s, config); }
-                } else {
-                    int i = 0;
-                    while (reloaded == NULL) {
-                        if (i++ > maxTries) throw new TimeoutException("Max tries [" + maxTries + "] reached");
-                        reloaded = getVersioned(s, config);
-                    }
+        @Override
+        public T reviveApply(S s, final int maxTries) throws TimeoutException {
+            maxTriesException(maxTries);
+            Versioned<T> val = getVersioned(s);
+            if (val.version() != CREATED) {
+                int i = 0;
+                while (val == NULL) {
+                    if (i++ > maxTries) throw new TimeoutException("Max tries [" + maxTries + "] reached");
+                    val = getVersioned(s);
                 }
-                return reloaded.value();
             }
+            return val.value();
         }
 
         @Override
-        public final T apply(S s) {
+        public <E extends Exception> T reviveApply(S s, final int maxTries, Locks.ExceptionConfig<E> config) throws TimeoutException, E {
+            maxTriesException(maxTries);
+            Versioned<T> val = getVersioned(s, config);
+            if (val.version() != CREATED) {
+                int i = 0;
+                while (val == NULL) {
+                    if (i++ > maxTries) throw new TimeoutException("Max tries [" + maxTries + "] reached");
+                    val = getVersioned(s, config);
+                }
+            }
+            return val.value();
+        }
+
+        @Override
+        public T apply(S s) {
             final Versioned<T> prev = ref;
             if (prev.version() == CREATED) return prev.value();
             else {
                 if (prev == NULL && VALUE.compareAndSet(this, NULL, CREATING)) {
                     T res = function.apply(s);
-                    onCreated(res);
                     ref = new Versioned<>(CREATED, res);
                     return res;
                 } else return spinner.spin().value();
             }
         }
 
-        public final<E extends Exception> T apply(S s, Locks.ExceptionConfig<E> config) throws E {
+        @Override
+        public <E extends Exception> T apply(S s, Locks.ExceptionConfig<E> config) throws E {
             return getVersioned(s, config).value();
         }
 
         private <E extends Exception> Versioned<T> getVersioned(S s, Locks.ExceptionConfig<E> config) throws E {
-            final Versioned<T> prev = ref;
+            Versioned<T> prev = ref;
             if (prev.version() == CREATED) return prev;
             else {
                 if (prev == NULL && VALUE.compareAndSet(this, NULL, CREATING)) {
-                    T res = function.apply(s);
-                    onCreated(res);
-                    Versioned<T> v = new Versioned<>(CREATED, res);
-                    ref = v;
-                    return v;
-                } else return spinner.spin(config);
+                    prev = new Versioned<>(CREATED, function.apply(s));
+                    ref = prev;
+                    return prev;
+                } else return timeoutSpin(config);
             }
         }
 
+        private Versioned<T> getVersioned(S s) {
+            Versioned<T> prev = ref;
+            if (prev.version() == CREATED) return prev;
+            else {
+                if (prev == NULL && VALUE.compareAndSet(this, NULL, CREATING)) {
+                    prev = new Versioned<>(CREATED, function.apply(s));
+                    ref = prev;
+                    return prev;
+                } else return spinner.spin();
+            }
+        }
     }
 
     /**
      * Collection of generic classes ({@link V}) that extend {@link Supplier}s that can be stored and retrieved via keys of common type {@link K} .
      * */
-    public static class KeyedCollection2<K, V extends Supplier<?>> extends AbstractMap<K, V> {
+    public static class KeyedCollection<K, V extends Supplier<?>> extends AbstractMap<K, V> {
         /**
-         * Default implementation of {@link KeyedCollection2} where {@code V} = {@link Supplier} of type {@code ?}
+         * Default implementation of {@link KeyedCollection} where {@code V} = {@link Supplier} of type {@code ?}
          * */
-        public static class Default<K> extends KeyedCollection2<K, Supplier<?>> {
+        public static class Default<K> extends KeyedCollection<K, Supplier<?>> {
 
             @SafeVarargs
             public
@@ -1546,7 +1469,7 @@ public class LazyHolder<T> {
         final Map<K, V> map;
 
         /**
-         * Key-value pair entry for the {@link KeyedCollection2} class
+         * Key-value pair entry for the {@link KeyedCollection} class
          * */
         public static class SupplierEntry<T, K, V extends Supplier<T>>{
             final K key;
@@ -1578,7 +1501,7 @@ public class LazyHolder<T> {
         }
 
         @SafeVarargs
-        public<E extends SupplierEntry<?, K, V>> KeyedCollection2(
+        public<E extends SupplierEntry<?, K, V>> KeyedCollection(
                 boolean unmodifiable,
                 final E... entries
         ) {
@@ -1596,7 +1519,7 @@ public class LazyHolder<T> {
         }
 
         @SafeVarargs
-        public KeyedCollection2(
+        public KeyedCollection(
                 boolean unmodifiable,
                 final SupplierEntry.Default<K, ?>... entries
         ) {
@@ -1614,15 +1537,19 @@ public class LazyHolder<T> {
         }
 
         <E extends SupplierEntry<?, K, V>> void exceptPut(Map<K, V> map, E e) {
-            if (map.putIfAbsent(e.key, e.value) == null) {
-                onAdded(e.value);
+            final V e_val = e.value;
+            V val = map.putIfAbsent(e.key, e_val);
+            if (val == null) {
+                onAdded(e_val);
             } else throw new IllegalStateException("Key " + e.key + " already present in map = " + map);
         }
 
         @SuppressWarnings("unchecked")
         <T, E extends SupplierEntry<T, K, ? extends Supplier<T>>> void exceptTypedPut(Map<K, V> map, E e) {
-            if (map.putIfAbsent(e.key, (V) e.value) == null) {
-                onAdded((V) e.value);
+            final V e_val = (V) e.value;
+            V val = map.putIfAbsent(e.key, e_val);
+            if (val == null) {
+                onAdded(e_val);
             } else throw new IllegalStateException("Key " + e.key + " already present in map = " + map);
         }
 
@@ -1632,7 +1559,7 @@ public class LazyHolder<T> {
          * */
         protected void onAdded(V value) {}
 
-        public KeyedCollection2() { this.map = new ConcurrentHashMap<>(); }
+        public KeyedCollection() { this.map = new ConcurrentHashMap<>(); }
 
         /**
          * This method will only accept new keys.
@@ -1698,8 +1625,8 @@ public class LazyHolder<T> {
      * <p> The collection cannot be changed once the Collection is created. <p>
      * */
     public static
-    class SingletonCollection<T, S extends Supplier<T>> extends KeyedCollection2<Class<T>, S> {
-        public static class Default extends KeyedCollection2.Default<Class<?>> {
+    class SingletonCollection<T, S extends Supplier<T>> extends KeyedCollection<Class<T>, S> {
+        public static class Default extends KeyedCollection.Default<Class<?>> {
 
             @SafeVarargs
             public

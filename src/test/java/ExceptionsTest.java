@@ -61,7 +61,7 @@ public class ExceptionsTest {
         Locks.ExceptionConfig<RuntimeException> shortRT = Locks.ExceptionConfig.runtime(
 //                        builder -> builder.setDurationUnit()
                 builder -> {
-                    builder.setDurationUnit(3500, TimeUnit.MILLISECONDS);
+                    builder.setTotal(3500, TimeUnit.MILLISECONDS);
                     builder.setInitialWaitFraction(200);
                     builder.setMaxWaitFraction(10);
                     builder.setBackOffFactor(1.6);
@@ -103,7 +103,7 @@ public class ExceptionsTest {
                     new Thread(
                             () -> {
                                 try {
-                                    TAG tag2 = integerSupplier.get();
+                                    TAG tag2 = integerSupplier.get(Locks.ExceptionConfig.unbridled());
                                     long end = System.nanoTime();
                                     System.out.println(""
                                             + "[GET SUCCESS] = " + tag2

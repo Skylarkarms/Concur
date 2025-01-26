@@ -1,7 +1,11 @@
 # Concur
-[latest version] = `1.0.9`
+[latest version] = `1.1.0`
 
 Additional concurrent utilities for the Java environment.
+
+[found in]:
+   - [`io.github.skylarkarms:lambdaprofiler:`](https://github.com/Skylarkarms/LambdaProfiler)
+   - [`io.github.skylarkarms:solo:`](https://github.com/Skylarkarms/solo)
 
 ### Implementation
 In your `build.gradle` file
