@@ -17,7 +17,8 @@ import java.util.function.IntSupplier;
  * {@link #CREATED}.
  * <p> Different spin-lock strategies can be defined with a {@link Locks.Config} object via {@link Consumer}&lt;{@link Locks.Config.Builder}&gt; or {@link Locks.ExceptionConfig}&lt;{@link RuntimeException}&gt;.
  * */
-public class LazyHolder<T> implements Lazy<T>{
+public class LazyHolder<T>
+{
     /**
      * Set to {@code true} for more detailed {@link Exception}s
      * <p> Setting this to {@code true} will hamper performance.
@@ -275,8 +276,7 @@ public class LazyHolder<T> implements Lazy<T>{
         }
     }
 
-    @Override
-    public final boolean isNull() { return NULL == VALUE.getOpaque(this); }
+    public boolean isNull() { return NULL == VALUE.getOpaque(this); }
 
     final StackTraceElement[] es;
 
@@ -309,8 +309,7 @@ public class LazyHolder<T> implements Lazy<T>{
     /**
      * @return null if the inner value was null or was already cleared
      * */
-    @Override
-    public final T getAndClear() {
+    public T getAndClear() {
         int c_ver = clearingVer.incrementAndGet();
         final Versioned<T> prev = ref;
         int ver = prev.version();
@@ -427,8 +426,7 @@ public class LazyHolder<T> implements Lazy<T>{
         };
     }
 
-    @Override
-    public final <E extends Exception> T getAndClear(final Locks.ExceptionConfig<E> timeoutConfig) throws E {
+    public <E extends Exception> T getAndClear(final Locks.ExceptionConfig<E> timeoutConfig) throws E {
         int c_ver = clearingVer.incrementAndGet();
         final Versioned<T> prev = ref;
         int ver = prev.version();
@@ -581,8 +579,7 @@ public class LazyHolder<T> implements Lazy<T>{
      * @return true if the {@code expect}-ed value matched the inner value.
      * @param expect the expected value that will allow the reference clearing.
      * */
-    @Override
-    public final boolean clear(T expect) {
+    public boolean clear(T expect) {
         assert expect != null : "We'd rather expect that 'expect' was not null... thanks...";
         Versioned<T> prev = ref;
         return
@@ -595,8 +592,7 @@ public class LazyHolder<T> implements Lazy<T>{
      * @return The current value.
      * */
     @SuppressWarnings("unchecked")
-    @Override
-    public final T getOpaque() { return ((Versioned<T>) VALUE.getOpaque(this)).value(); }
+    public T getOpaque() { return ((Versioned<T>) VALUE.getOpaque(this)).value(); }
 
     /**
      * Lazy and stateful {@link java.util.function.Supplier}.
@@ -604,7 +600,9 @@ public class LazyHolder<T> implements Lazy<T>{
      * {@link #builder} has finished.
      * @see LazyHolder
      * */
-    public static final class Supplier<T> extends LazyHolder<T> implements LazySupplier<T> {
+    public static class Supplier<T> extends LazyHolder<T>
+            implements java.util.function.Supplier<T>
+    {
         private final java.util.function.Supplier<T> builder;
 
         /**
@@ -652,7 +650,6 @@ public class LazyHolder<T> implements Lazy<T>{
          * in which case both creating phases will be subjected to the same Timeout parameter.
          * The Timeout parameter will be refreshed each retry.
          * */
-        @Override
         public T reviveGet(int maxTries) throws TimeoutException {
             maxTriesException(maxTries);
             Versioned<T> val = getVersioned();
@@ -666,7 +663,6 @@ public class LazyHolder<T> implements Lazy<T>{
             return val.value();
         }
 
-        @Override
         public T reviveGet() {
             Versioned<T> val = getVersioned();
             if (val.version() != CREATED) {
@@ -688,7 +684,6 @@ public class LazyHolder<T> implements Lazy<T>{
             }
         }
 
-        @Override
         public <E extends Exception> T reviveGet(Locks.ExceptionConfig<E> config, final int maxTries) throws TimeoutException, E {
             maxTriesException(maxTries);
             Versioned<T> val = getVersioned(config);
@@ -728,7 +723,6 @@ public class LazyHolder<T> implements Lazy<T>{
             }
         }
 
-        @Override
         public <E extends Exception> T get(Locks.ExceptionConfig<E> config) throws E {
             return getVersioned(config).value();
         }
@@ -739,7 +733,7 @@ public class LazyHolder<T> implements Lazy<T>{
         if (maxTries == 0 || maxTries == Integer.MAX_VALUE) throw new IllegalStateException("Invalid retries");
     }
 
-    public static final class OfInt implements OfIntSupplier {
+    public static class OfInt implements IntSupplier {
 
         static final ValState NULL = new ValState(0, NULL_PHASE);
         static final ValState CREATING = new ValState(0, CREATING_PHASE);
@@ -982,7 +976,6 @@ public class LazyHolder<T> implements Lazy<T>{
             }
         }
 
-        @Override
         public <E extends Exception> int getAsInt(Locks.ExceptionConfig<E> config) throws E {
             return getState(config).val;
         }
@@ -992,7 +985,6 @@ public class LazyHolder<T> implements Lazy<T>{
         /**
          * @return null if the inner value was null or was already cleared
          * */
-        @Override
         public int getAndClear() {
             int c_ver = clearingVer.incrementAndGet();
             final ValState prev = ref;
@@ -1110,7 +1102,6 @@ public class LazyHolder<T> implements Lazy<T>{
             };
         }
 
-        @Override
         public <E extends Exception> int getAndClear(final Locks.ExceptionConfig<E> timeoutConfig) throws E {
             int c_ver = clearingVer.incrementAndGet();
             final ValState prev = ref;
@@ -1231,7 +1222,6 @@ public class LazyHolder<T> implements Lazy<T>{
          * @return true if the {@code expect}-ed value matched the inner value.
          * @param expect the expected value that will allow the reference clearing.
          * */
-        @Override
         public boolean clear(int expect) {
             ValState prev = ref;
             return
@@ -1272,7 +1262,6 @@ public class LazyHolder<T> implements Lazy<T>{
          * in which case both creating phases will be subjected to the same Timeout parameter.
          * The Timeout parameter will be refreshed each retry.
          * */
-        @Override
         public int reviveGet(int maxTries) throws TimeoutException {
             if (maxTries == 0) throw new IllegalStateException("Invalid retries");
             ValState val = getState();
@@ -1288,7 +1277,6 @@ public class LazyHolder<T> implements Lazy<T>{
             return val.val;
         }
 
-        @Override
         public <E extends Exception> int reviveGet(Locks.ExceptionConfig<E> config, int maxTries) throws TimeoutException, E {
             if (maxTries == 0) throw new IllegalStateException("Invalid retries");
             ValState val = getState(config);
@@ -1315,8 +1303,8 @@ public class LazyHolder<T> implements Lazy<T>{
      * <p> Lambdas are prone to false-positive memory-leaks by APIs like Leak-Cannary.
      * Anonymous classes prevent them.
      * */
-    public static final class Function<S, T> extends LazyHolder<T>
-            implements LazyFunction<S, T> {
+    public static class Function<S, T> extends LazyHolder<T>
+            implements java.util.function.Function<S, T> {
 
         private final java.util.function.Function<S, T> function;
 
@@ -1349,7 +1337,6 @@ public class LazyHolder<T> implements Lazy<T>{
 
         Function(java.util.function.Function<S, T> function) { this(FINAL_CONFIG.ref, function); }
 
-        @Override
         public T reviveApply(S s) {
             Versioned<T> val = getVersioned(s);
             if (val.version() != CREATED) {
@@ -1367,7 +1354,6 @@ public class LazyHolder<T> implements Lazy<T>{
          * in which case both creating phases will be subjected to the same Timeout parameter.
          * The Timeout parameter will be refreshed each retry.
          * */
-        @Override
         public T reviveApply(S s, final int maxTries) throws TimeoutException {
             maxTriesException(maxTries);
             Versioned<T> val = getVersioned(s);
@@ -1381,7 +1367,6 @@ public class LazyHolder<T> implements Lazy<T>{
             return val.value();
         }
 
-        @Override
         public <E extends Exception> T reviveApply(S s, final int maxTries, Locks.ExceptionConfig<E> config) throws TimeoutException, E {
             maxTriesException(maxTries);
             Versioned<T> val = getVersioned(s, config);
@@ -1408,7 +1393,6 @@ public class LazyHolder<T> implements Lazy<T>{
             }
         }
 
-        @Override
         public <E extends Exception> T apply(S s, Locks.ExceptionConfig<E> config) throws E {
             return getVersioned(s, config).value();
         }
@@ -1488,6 +1472,9 @@ public class LazyHolder<T> implements Lazy<T>{
                 if (value == null) throw new IllegalStateException("Must override valueTemplate(Object... varArgs)");
             }
 
+            /**
+             * Default implementation that supports direct {@link Supplier} instances.
+             * */
             public static class Default<K, T> extends SupplierEntry<T, K, Supplier<T>> {
 
                 public Default(K key, java.util.function.Supplier<T> value) {
@@ -1696,7 +1683,7 @@ public class LazyHolder<T> implements Lazy<T>{
         };
     }
 
-    private static final String formatStack(StackTraceElement[] es) throws AssertionError {
+    private static String formatStack(StackTraceElement[] es) throws AssertionError {
         int le = es.length;
         assert le > 0 : "`startAt` index [" + 0 + "] greater than or equal to StackTraceElement arrays length [" + le  +"].";
         StringBuilder sb = new StringBuilder((le * 2) + 2);
