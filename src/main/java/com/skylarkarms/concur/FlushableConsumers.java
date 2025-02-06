@@ -93,7 +93,7 @@ public final class FlushableConsumers<X> implements Consumer<X> {
 
     /**
      * If the {@link #accept(Object)} dispatch is currently processing,
-     * The consumer will consume the value && will NOT be added to the  Dequeue.
+     * The consumer will consume the value AND will NOT be added to the  Dequeue.
      * */
     @SuppressWarnings("unchecked")
     public void push(Consumer<? super X> consumer) {

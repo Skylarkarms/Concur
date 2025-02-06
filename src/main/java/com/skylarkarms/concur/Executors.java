@@ -252,196 +252,93 @@ public final class Executors {
     public static class Delayer
             implements BaseExecutor
     {
+        final long nano;
         final Executor executor;
+        final Locks.Valet valet = new Locks.Valet();
+        final Runnable lockable;
 
-        final long nanoTime;
-        volatile Leader leader;
+        volatile Runnable core;
 
-        /**
-         * @return true if it is still waiting.
-         * <p> false if the waiting period resumed AND:
-         * <ul>
-         *     <li>
-         *         The Runnable command is processing OR
-         *     </li>
-         *     <li>
-         *         The Runnable command has finished processing
-         *     </li>
-         * </ul>
-         * */
-        public boolean isWaiting() { return leader.isWaiting(); }
-
-        Runnable command;
-        static final VarHandle LEADER, COMMAND;
-
-        static {
-            MethodHandles.Lookup lookup = MethodHandles.lookup();
-            try {
-                COMMAND = lookup.findVarHandle(
-                        Delayer.class, "command",
-                        Runnable.class);
-                LEADER = lookup.findVarHandle(Delayer.class, "leader", Leader.class);
-            } catch (NoSuchFieldException | IllegalAccessException e) {
-                throw new ExceptionInInitializerError(e);
-            }
+        public boolean isWaiting(){
+            return valet.isBusy();
         }
 
-        final Runnable valet = () -> {
-            Leader current = new Leader();
-            assert leader == null;
-            LEADER.setOpaque(this, current);
-            Runnable early = (Runnable) COMMAND.getOpaque(this);
-            //Prevents context switching spurious failures.
-            //On first pass, the Thread may still be busy with a previous task, including this task.
-            if (current.firstPass() && COMMAND.compareAndSet(this, early, null)) {
-                leader = null;
-                VarHandle.storeStoreFence();
-                early.run();
-            } else {
-                while (
-                        (early = (Runnable) COMMAND.getOpaque(this)) != null
-                ) {
-                    if (
-                            current.normalPass() &&
-                                    COMMAND.compareAndSet(this,
-                                            early,
-                                            null)
-                    ) {
-                        leader = null;
-                        VarHandle.storeStoreFence();
-                        early.run();
-                        break;
+        public Delayer(Executor executor, long duration, TimeUnit unit) {
+            this(executor, unit.toNanos(duration));
+        }
+
+        public Delayer(long duration, TimeUnit unit) {
+            this(UNBRIDLED_NORM.ref, unit.toNanos(duration));
+        }
+
+        public Delayer(long nanos) {
+            this(UNBRIDLED_NORM.ref, nanos);
+        }
+
+        public Delayer(Executor executor, long nano) {
+            this.executor = executor;
+            this.nano = nano;
+            this.lockable = () -> {
+                Boolean res =  valet.parkUnpark(nano);
+                if (res != null) {
+                    Runnable r = core;
+                    if (res) {
+                        if (r != null) r.run();
+                        //else may have been interrupted...
+                    } else {
+                        // interruption SUCCESSFUL
+                        // core may have been swapped.
+                        res =  valet.parkUnpark(nano);
+                        while (
+                                res != null
+                                        && !res
+                        ) {
+                            res = valet.parkUnpark(nano);
+                        }
+                        r = core;
+                        if (res != null && r != null) r.run();
+                        // else valte was busy... on a different Thread...
+
                     }
                 }
-                leader = null;
-            }
-        };
-
-        public Delayer(long duration, TimeUnit unit) { this(UNBRIDLED(), unit.toNanos(duration)); }
-        public Delayer(Executor executor, long duration, TimeUnit unit) { this(executor, unit.toNanos(duration)); }
-
-        public Delayer(Executor executor, long nanoTime) {
-            this.executor = executor;
-            this.nanoTime = nanoTime;
-            if (nanoTime == 0) throw new IllegalStateException("Time cannot be 0");
+            };
         }
 
-        final class Leader {
-            final Thread lead;
-
-            Leader() { lead = Thread.currentThread(); }
-
-            private static int ver = 0;
-
-            final int version = ver++;
-
-            private static final int
-                    open = 0,
-                    interrupted = 1,
-                    waiting = 2;
-            String valueOf(int val) {
-                return switch (val) {
-                    case open -> "open";
-                    case interrupted -> "interrupted";
-                    case waiting -> "waiting";
-                    default -> throw new IllegalStateException("Unexpected value: " + val);
-                } + "\n version = " + version +
-                        ",\n @" + hashCode() + "}";
-            }
-
-            volatile int state = open;
-            static final VarHandle STATE;
-            static {
-                try {
-                    STATE = MethodHandles.lookup().findVarHandle(Leader.class, "state", int.class);
-                } catch (NoSuchFieldException | IllegalAccessException e) {
-                    throw new ExceptionInInitializerError(e);
-                }
-            }
-
-            boolean isWaiting() { return waiting == (int)STATE.getOpaque(this); }
-
-            /**
-             * @return true if properly closed, false if interrupted
-             * */
-            boolean normalPass() {
-                if (interrupted == (int) STATE.getAndSet(this, waiting)) {
-                    LockSupport.parkNanos(nanoTime);
-                }
-                LockSupport.parkNanos(this, nanoTime);
-                return waiting == (int) STATE.getAndSet(this, open);
-            }
-            /*
-             * A spurious wakeup happens if the Threadpool sends a previously
-             * unparked Thread which happened a couple of nanos before a parkNanos.
-             * One reason may be that, because the Thread is nulled before the Runnable has finished processing,
-             * a new process may start while the same Thread is still processing.
-             * So there may be 2 instances of the same Thread simultaneously.
-             * */
-            boolean firstPass() {
-                if (interrupted == (int) STATE.getAndSet(this, waiting)) {
-                    LockSupport.parkNanos(nanoTime);
-                }
-                long prev = System.nanoTime();
-                LockSupport.parkNanos(this, nanoTime);
-                long span = System.nanoTime() - prev;
-                final int res;
-                if (waiting ==
-                        (res = (int) STATE.getAndSet(this, open))
-                        && span < nanoTime) {
-                    LockSupport.parkNanos(this, nanoTime);
-                }
-                return res == waiting;
-            }
-            boolean unpark() {
-                if (
-                        STATE.compareAndSet(this, waiting, interrupted)
-                ) {
-                    LockSupport.unpark(lead);
-                    return true;
-                }
-                return false;
-            }
-
-            void sysUnpark() {
-                if (
-                        STATE.compareAndSet(this, waiting, interrupted)
-                ) {
-                    LockSupport.unpark(lead);
-                    VarHandle.fullFence();
-                }
-            }
-
-            @Override
-            public String toString() {
-                return "Leader{"
-                        + "\n >>> leading Thread=" + lead
-                        + ",\n >>> state=" + valueOf((int)STATE.getOpaque(this))
-                        + "\n}";
-            }
+        public boolean interrupt() {
+            core = null;
+            Thread cur = valet.interrupt();
+            if (cur != null) {
+                cur.interrupt();
+                return true;
+            } else return false;
         }
 
         @Override
         public boolean onExecute(Runnable command) {
-            //true if an execution is already processing
-            if (COMMAND.getAndSet(this, command) != null) {
-                Leader current;
-                if ((current = (Leader) LEADER.getOpaque(this)) != null) {
-                    current.sysUnpark();
-                }
-                return false;
-            } else {
-                executor.execute(valet);
+            core = command;
+            Thread cur = valet.interrupt();
+            // successful interruption is NOT NULL
+            // if NOT NULL... DO NOT EXECUTE
+            if (cur == null) { // if NOT BUSY
+                executor.execute(
+                        lockable
+                );
                 return true;
             }
+            // else the interruption WAS successful
+            cur.interrupt();
+            return false;
         }
 
-        public boolean interrupt() {
-            Leader current;
-            if ((current = (Leader) LEADER.getOpaque(this)) != null) {
-                return current.unpark();
-            }
-            return false;
+        @Override
+        public String toString() {
+            String hash = Integer.toString(hashCode());
+            return "Delayer@".concat(hash).concat("{" +
+                    ("\n >>> nanoTime=" + nano +
+                            "\n    - (millis)=" + Duration.ofNanos(nano).toMillis() +
+                            ",\n >>> core runnable (Runnable) =" + core
+                            + ",\n >>> executor =\n" + executor.toString().indent(3)).indent(3)
+                    + "}@").concat(hash);
         }
 
         public static void oneShot(
@@ -487,21 +384,6 @@ public final class Executors {
                         runnable.run();
                     }
             ).start();
-        }
-
-        @Override
-        public String toString() {
-            String hash = Integer.toString(hashCode());
-            return "Delayer@".concat(hash).concat("{" +
-                    ("\n >>> nanoTime=" + nanoTime +
-                    "\n    - (millis)=" + Duration.ofNanos(nanoTime).toMillis() +
-                    ",\n >>> leader=\n" +
-                    (leader == null ? "   [null leader],\n" :
-                            leader.toString().concat(",").indent(3)) +
-                    " >>> command=" + command +
-                    ",\n >>> valet (Runnable) =" + valet
-                    + ",\n >>> executor =\n" + executor.toString().indent(3)).indent(3)
-                    + "}@").concat(hash);
         }
     }
 

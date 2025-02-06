@@ -66,8 +66,8 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
     int updateAndGetLengthShortCircuit(UnaryOperator<T[]> updateFunction) {
         T[] prev = get(), next = null;
         for (boolean haveNext = false;;) {
-            if (!haveNext)
-                next = updateFunction.apply(prev);
+            if (!haveNext) next = updateFunction.apply(prev);
+
             if (next != prev) {
                 if (weakCompareAndSetVolatile(prev, next))
                     return next.length;
@@ -84,8 +84,8 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
     public int add(T t) {
         return updateAndGetLength(
                 prev -> {
-                    int newI;
-                    T[] clone = Arrays.copyOf(prev, (newI = prev.length) + 1);
+                    int newI = prev.length;
+                    T[] clone = Arrays.copyOf(prev, newI + 1);
                     clone[newI] = t;
                     return clone;
                 }
@@ -97,8 +97,8 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
         return updateAndGetLengthShortCircuit(
                 prev -> {
                     if (!allow.getAsBoolean()) return prev;
-                    int newI;
-                    T[] clone = Arrays.copyOf(prev, (newI = prev.length) + 1);
+                    int newI = prev.length;
+                    T[] clone = Arrays.copyOf(prev, newI + 1);
                     clone[newI] = t;
                     if (!allow.getAsBoolean()) return prev;
                     return clone;
@@ -107,23 +107,24 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
     }
 
     public boolean hardRemove30Throw(T t) {
-        T[] prev, next;
+        T[] prev = localArr, next;
         int index, tries = 0;
         boolean allowed;
         while (
                 (allowed = (index = indexOf(
-                        prev = localArr,
+                        prev,
                         t1 -> t1 == t
                 )) != -1)
                         ||
                         tries++ < 100
         ) {
-            if (
-                    allowed
-                            && VALUE.compareAndSet(this, prev, (next = fastRemove(prev, EMPTY, index)))
-            ) {
-                return next.length == 0;
+            if (allowed) {
+                next = fastRemove(prev, EMPTY, index);
+                if (VALUE.compareAndSet(this, prev, next)) {
+                    return next.length == 0;
+                }
             }
+            prev = localArr;
         }
         throw new IllegalStateException("Object " + t + " not present in collection..." +
                 ",\n tries = " + tries);
@@ -133,14 +134,28 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
      * Extremely contentious remove will attempt to remove until succeeds and if the
      * item is not found an {@link AssertionError} will throw.
      * */
-    @SuppressWarnings("StatementWithEmptyBody")
     public boolean contentiousRemove(T t) {
-        T[] prev, next;
-        while (!VALUE.weakCompareAndSet(this, prev = localArr,
-                next = fastRemove(prev, EMPTY,
+        T[] prev = localArr,
+                next = fastRemove(
+                        prev,
+                        EMPTY,
                         assertFoundIndex(t, prev)
-                )
-        )) {}
+                );
+        while (!VALUE.weakCompareAndSet(this, prev,
+                next
+        )) {
+            T[] wit = localArr; // this is better than dup_2... ("haveNext")
+            // and even better if we hoist `wit`, ONLY if CAS
+            // is assumed to fail a lot.
+            if (wit != prev) {
+                prev = wit;
+                next = fastRemove(
+                        wit,
+                        EMPTY,
+                        assertFoundIndex(t, wit)
+                );
+            }
+        }
         return next.length == 0;
     }
 
@@ -149,13 +164,14 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
 
     /**Non-contentious remove, will try ONCE and not throw*/
     public boolean nonContRemove(Predicate<T> when) {
-        T[] prev, next;
+        T[] prev = localArr, next;
         int index = indexOf(
-                prev = localArr,
+                prev,
                 when
         );
         assert index != -1 : "Item not found Error.";
-        return VALUE.compareAndSet(this, prev, next = fastRemove(prev, EMPTY, index))
+        next = fastRemove(prev, EMPTY, index);
+        return VALUE.compareAndSet(this, prev, next)
                 && next.length == 0;
     }
 
@@ -169,7 +185,27 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
 
     /**Will try to remove up to 200 tries, waiting for the activation to complete*/
     public T[] removeAll200() {
-        return weakGetAndSet200(EMPTY);
+        T[] prev = localArr;
+        int s_tries = 0, s_toThrow = 0;
+        while (
+                !(prev != EMPTY
+                        && VALUE.weakCompareAndSet(this, prev, EMPTY))
+        ) {
+            if (s_tries++ > tries) {
+                if (s_toThrow++ == toThrow) {
+                    throw new RuntimeException(
+                            "prev was Empty, tries = " + s_tries +
+                                    ",\n arr = " + Arrays.toString(localArr) +
+                                    ",\n EMPTY = " + Arrays.toString(EMPTY)
+                    );
+                } else {
+                    LockSupport.parkNanos(250); //weak park, that's ok.
+                    s_tries = 0;
+                }
+            }
+            prev = localArr;
+        }
+        return prev;
     }
 
     @SuppressWarnings("unchecked")
@@ -186,50 +222,47 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
     // 3801 fails at Intel(R) Core(TM) i7-4700HQ
 
     private static final int toThrow = 8;
-    T[] weakGetAndSet200(T[] next) {
-        T[] prev;
-        int s_tries = 0, s_toThrow = 0;
-        while (
-                !((prev = localArr) != EMPTY
-                        && VALUE.weakCompareAndSet(this, prev, next))
-        ) {
-            if (s_tries++ > tries) {
-                if (s_toThrow++ == toThrow) {
-                    throw new RuntimeException(
-                            "prev was Empty, tries = " + s_tries +
-                                    ",\n arr = " + Arrays.toString(localArr) +
-                                    ",\n EMPTY = " + Arrays.toString(EMPTY)
-                    );
-                } else {
-                    LockSupport.parkNanos(250);
-                    s_tries = 0;
-                }
-            }
-        }
-        return prev;
-    }
 
     /**@return previous array*/
     public T[] addAll(T[] ts) {
-        T[] prev;
-        return EMPTY == (prev = weakGetAndSet(ts)) ? null : prev;
+        T[] prev = weakGetAndSet(ts);
+        return prev == EMPTY ? null : prev;
     }
+
+    public int size() {return localArr.length;}
 
     private static<E> E[] fastRemove(E[] prevArray, E[] empty, int i) {
         int newSize = prevArray.length - 1;
         if (newSize == 0) return empty;
         E[] dest_arr = prevArray;
-        if ((newSize) >= i) {
+        if (newSize >= i) {
             dest_arr = Arrays.copyOf(prevArray, newSize);
             System.arraycopy(prevArray, i + 1, dest_arr, i, newSize - i);
         }
         return dest_arr;
     }
 
-    public boolean contains(T object) { return contains(t -> t == object); }
+    @SuppressWarnings("unchecked")
+    public boolean contains(T object) {
+        T[] prevArray = (T[])VALUE.getOpaque(this);
+        int al = prevArray.length;
+        for (int i = 0; i < al; i++) {
+            T toTest = prevArray[i];
+            if (toTest == object || (toTest != null && toTest.equals(object))) return true;
+        }
+        return false;
+    }
 
     @SuppressWarnings("unchecked")
-    public boolean contains(Predicate<T> when) { return indexOf((T[])VALUE.getOpaque(this), when) != -1; }
+    public boolean contains(Predicate<T> when) {
+        T[] prevArray = (T[])VALUE.getOpaque(this);
+        int al = prevArray.length;
+        for (int i = 0; i < al; i++) {
+            T toTest = prevArray[i];
+            if (toTest != null && when.test(toTest)) return true;
+        }
+        return false;
+    }
 
     /**Wil shortC upon first one found*/
     private static<E> int indexOf(E[] prevArray, Predicate<E> when) {
