@@ -8,7 +8,6 @@ import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
-import java.util.function.UnaryOperator;
 
 public final class CopyOnWriteArray<T> implements Supplier<T[]> {
     private final T[] EMPTY;
@@ -52,68 +51,71 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
         }
     }
 
-    int updateAndGetLength(UnaryOperator<T[]> updateFunction) {
-        T[] prev = get(), next = null;
+    /**@return the index in which the item was inserted*/
+    public int add(T t) {
+        Object[] prev = localArr, next = null;
         for (boolean haveNext = false;;) {
             if (!haveNext)
-                next = updateFunction.apply(prev);
-            if (weakCompareAndSetVolatile(prev, next))
-                return next.length;
+                next = getNext(t, prev);
+            if (VALUE.weakCompareAndSet(this, prev, next))
+                return next.length - 1;
             haveNext = (prev == (prev = get()));
         }
     }
 
-    int updateAndGetLengthShortCircuit(UnaryOperator<T[]> updateFunction) {
-        T[] prev = get(), next = null;
-        for (boolean haveNext = false;;) {
-            if (!haveNext) next = updateFunction.apply(prev);
-
-            if (next != prev) {
-                if (weakCompareAndSetVolatile(prev, next))
-                    return next.length;
-                haveNext = (prev == (prev = get()));
-            } else return 0;
-        }
-    }
-
-    public boolean weakCompareAndSetVolatile(T[] expectedValue, T[] newValue) {
-        return VALUE.weakCompareAndSet(this, expectedValue, newValue);
-    }
-
-    /**@return the index in which the item was inserted*/
-    public int add(T t) {
-        return updateAndGetLength(
-                prev -> {
-                    int newI = prev.length;
-                    T[] clone = Arrays.copyOf(prev, newI + 1);
-                    clone[newI] = t;
-                    return clone;
-                }
-        ) - 1;
+    private static Object[] getNext(Object t, Object[] prev) {
+        int newI = prev.length;
+        Object[] clone = Arrays.copyOf(prev, newI + 1, prev.getClass());
+        clone[newI] = t;
+        return clone;
     }
 
     /**@return the index in which the item was inserted, or -1 if '{@code allow}' returns true*/
     public int add(T t, BooleanSupplier allow) {
-        return updateAndGetLengthShortCircuit(
-                prev -> {
-                    if (!allow.getAsBoolean()) return prev;
-                    int newI = prev.length;
-                    T[] clone = Arrays.copyOf(prev, newI + 1);
-                    clone[newI] = t;
-                    if (!allow.getAsBoolean()) return prev;
-                    return clone;
-                }
-        ) - 1;
+        Object[] prev = localArr, next = null;
+        for (boolean haveNext = false;;) {
+            if (!haveNext) next = getNext(t, allow, prev);
+
+            if (next != prev) {
+                if (VALUE.weakCompareAndSet(this, prev, next))
+                    return next.length - 1;
+                haveNext = (prev == (prev = get()));
+            } else return -1;
+        }
     }
 
+    private static final Object[] getNext(Object t, BooleanSupplier allow, Object[] prev) {
+        if (!allow.getAsBoolean()) return prev;
+        int newI = prev.length;
+        Object[] clone = Arrays.copyOf(prev, newI + 1, prev.getClass());
+        clone[newI] = t;
+        if (!allow.getAsBoolean()) return prev;
+        return clone;
+    }
+
+    /**
+     * <p> The comparison methodology used is as follows:
+     * <pre>{@code
+     *     void method(Object o) {
+     *        // ... ...
+     *         for (int i = 0; i < pl; i++) {
+     *             // inner objects will be forced to use their
+     *             // respective equal(Object) methods against the parameter object.
+     *             if (prev[i] == o) {
+     *                // proceed to remove `o`
+     *             }
+     *         }
+     *     }
+     * }</pre>
+     * */
     public boolean hardRemove30Throw(T t) {
         T[] prev = localArr, next;
         int index, tries = 0;
         boolean allowed;
         while (
-                (allowed = (index = indexOf(
+                (allowed = (index = fastIndexOf(
                         prev,
-                        t1 -> t1 == t
+                        t
                 )) != -1)
                         ||
                         tries++ < 100
@@ -132,14 +134,53 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
 
     /**
      * Extremely contentious remove will attempt to remove until succeeds and if the
-     * item is not found an {@link AssertionError} will throw.
+     * item is not found an {@link IllegalStateException} will throw.
+     * <p> The comparison methodology used is as follows:
+     * <pre>{@code
+     *     void method(Object o) {
+     *        // ... ...
+     *         for (int i = 0; i < pl; i++) {
+     *             T pt = prev[i];
+     *             // inner objects will be forced to use their
+     *             // respective equal(Object) methods against the parameter object.
+     *             if (pt == o || pt != null && pt.equals(o)) {
+     *                // proceed to remove `o`
+     *             }
+     *         }
+     *     }
+     * }</pre>
      * */
-    public boolean contentiousRemove(T t) {
+    public boolean contentiousRemove(Object t) {
+        T[] prev = localArr,
+                next = equalsRemove(
+                        prev,
+                        EMPTY,
+                        t
+                );
+        while (!VALUE.weakCompareAndSet(this, prev,
+                next
+        )) {
+            T[] wit = localArr; // this is better than dup_2... ("haveNext")
+            // and even better if we hoist `wit`, ONLY if CAS
+            // is assumed to fail a lot.
+            if (wit != prev) {
+                prev = wit;
+                next = equalsRemove(
+                        wit,
+                        EMPTY,
+                        t
+                );
+            }
+        }
+        return next.length == 0;
+    }
+
+    public boolean fastContentiousRemove(T t) {
         T[] prev = localArr,
                 next = fastRemove(
                         prev,
                         EMPTY,
-                        assertFoundIndex(t, prev)
+                        t
                 );
         while (!VALUE.weakCompareAndSet(this, prev,
                 next
@@ -152,35 +193,154 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
                 next = fastRemove(
                         wit,
                         EMPTY,
-                        assertFoundIndex(t, wit)
+                        t
                 );
             }
         }
         return next.length == 0;
     }
 
-    /**Non-contentious remove, will try ONCE and not throw*/
-    public boolean nonContRemove(T t) { return nonContRemove(t1 -> t1 == t); }
+    /**
+     * An object with the result from the search.
+     * Comprises:
+     * <ul>
+     *     <li>
+     *         {@link #size} = the current size of the array after the action
+     *     </li>
+     *     <li>
+     *         {@link #find} = the found object, or null if {@code !found}
+     *     </li>
+     *     <li>
+     *         {@link #found} = {@code `false`} if the search was unsuccessful
+     *     </li>
+     * </ul>
+     * */
+    public record Search<T>(int size, T find, boolean found){
+        public Search(int size, T find) {
+            this(size, find, true);
+        }
 
-    /**Non-contentious remove, will try ONCE and not throw*/
-    public boolean nonContRemove(Predicate<T> when) {
-        T[] prev = localArr, next;
-        int index = indexOf(
-                prev,
-                when
-        );
-        assert index != -1 : "Item not found Error.";
-        next = fastRemove(prev, EMPTY, index);
-        return VALUE.compareAndSet(this, prev, next)
-                && next.length == 0;
+        static final Search<?> not_found = new Search<>(-1, null, false);
+
+        @SuppressWarnings("unchecked")
+        static<S> Search<S> not_found() {
+            return (Search<S>) not_found;
+        }
     }
 
-    private int assertFoundIndex(T t, T[] prev) {
-        int found = indexOf(
-                prev, t1 -> t1 == t
-        );
-        assert found != -1 : "Item not found Error.";
-        return found;
+    /**Non-contentious remove, will try ONCE and not throw.
+     *  @return : {@link Search}
+     *  <ul>
+     *      <li>
+     *          {@link Search#found()} = item found
+     *      </li>
+     *      <li>
+     *          {@code `null`} = contention met, swap failed
+     *      </li>
+     *  </ul>
+     * <p> The comparison methodology used is as follows:
+     * <pre>{@code
+     *     void method(Object o) {
+     *        // ... ...
+     *         for (int i = 0; i < pl; i++) {
+     *             T pt = prev[i];
+     *             // inner objects will be forced to use their
+     *             // respective equal(Object) methods against the parameter object.
+     *             if (pt == o || pt != null && pt.equals(o)) {
+     *                // proceed to remove `o`
+     *             }
+     *         }
+     *     }
+     * }</pre>
+     * */
+    public Search<T> nonContRemove(Object o) {
+        T[] prev = localArr;
+        int pl = prev.length;
+        for (int i = 0; i < pl; i++) {
+            // inner objects will be forced to use their respective equal(Object) methods
+            T pt = prev[i];
+            if (pt == o || pt != null && pt.equals(o)) {
+                int newSize = pl - 1;
+                if (newSize == 0) return VALUE.compareAndSet(this, prev, EMPTY) ? new Search<>(0, pt) : null;
+                Object[] destArr = Arrays.copyOf(prev, newSize, prev.getClass());
+                if (i < newSize) {
+                    System.arraycopy(prev, i + 1, destArr, i, newSize - i);
+                }
+                return VALUE.compareAndSet(this, prev, destArr) ? new Search<>(newSize, pt) : null;
+            }
+        }
+        return Search.not_found();
+    }
+
+    /**Non-contentious remove, will try ONCE and not throw.
+     *  @return :
+     *  <ul>
+     *      <li>
+     *          -1 = item not found
+     *      </li>
+     *      <li>
+     *          -2 = contention met, swap failed
+     *      </li>
+     *      <li>
+     *         n >= 0 = new size
+     *      </li>
+     *  </ul>
+     * <p> The comparison methodology used is as follows:
+     * <pre>{@code
+     *     void method(Object o) {
+     *        // ... ...
+     *         for (int i = 0; i < pl; i++) {
+     *             // inner objects will be forced to use their
+     *             // respective equal(Object) methods against the parameter object.
+     *             if (prev[i] == o) {
+     *                // proceed to remove `o`
+     *             }
+     *         }
+     *     }
+     * }</pre>
+     * */
+    public int fastNonContRemove(T o) {
+        T[] prev = localArr/*, next*/;
+        int pl = prev.length;
+        for (int i = 0; i < pl; i++) {
+            // inner objects will be forced to use their respective equal(Object) methods
+            if (prev[i] == o) {
+
+                int newSize = pl - 1;
+                if (newSize == 0) {
+                    return VALUE.compareAndSet(this, prev, EMPTY) ? 0 : -2;
+                }
+                Object[] destArr = Arrays.copyOf(prev, newSize, prev.getClass());
+                if (i < newSize) {
+                    System.arraycopy(prev, i + 1, destArr, i, newSize - i);
+                }
+                return !VALUE.compareAndSet(this, prev, destArr) ? newSize : -2;
+            }
+        }
+        return -1;
+    }
+
+    /**Non-contentious remove, will try ONCE
+     * @return true if the item removed was the LAST one.
+     * */
+//    /**Non-contentious remove, will try ONCE and throw if not found.*/
+    public int nonContRemove(Predicate<T> when) {
+        T[] prev = localArr/*, next*/;
+        int pl = prev.length;
+        for (int i = 0; i < pl; i++) {
+            T p = prev[i];
+            if (p != null && when.test(p)) {
+                int newSize = pl - 1;
+                if (newSize == 0) return VALUE.compareAndSet(this, prev, EMPTY) ? 0 : -2;
+
+                Object[] destArr = Arrays.copyOf(prev, newSize, prev.getClass());
+                if (i < newSize) {
+                    System.arraycopy(prev, i + 1, destArr, i, newSize - i);
+                }
+                return VALUE.compareAndSet(this, prev, destArr) ? newSize : -2;
+            }
+        }
+        return -1;
     }
 
     /**Will try to remove up to 200 tries, waiting for the activation to complete*/
@@ -208,11 +368,6 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
         return prev;
     }
 
-    @SuppressWarnings("unchecked")
-    T[] weakGetAndSet(T[] next) {
-        return (T[]) VALUE.getAndSet(this, next);
-    }
-
     public static final int tries = 6300;
     // 6001 fails at AMD Ryzen 5 5500U ("onStateChanged fix")
     // 5801 fails at AMD Ryzen 5 5500U ("One read ++++" Activator)
@@ -224,51 +379,128 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
     private static final int toThrow = 8;
 
     /**@return previous array*/
+    @SuppressWarnings("unchecked")
     public T[] addAll(T[] ts) {
-        T[] prev = weakGetAndSet(ts);
+        T[] prev = (T[]) VALUE.getAndSet(this, ts);
         return prev == EMPTY ? null : prev;
     }
 
     public int size() {return localArr.length;}
 
+    @SuppressWarnings("unchecked")
     private static<E> E[] fastRemove(E[] prevArray, E[] empty, int i) {
         int newSize = prevArray.length - 1;
         if (newSize == 0) return empty;
-        E[] dest_arr = prevArray;
-        if (newSize >= i) {
-            dest_arr = Arrays.copyOf(prevArray, newSize);
-            System.arraycopy(prevArray, i + 1, dest_arr, i, newSize - i);
+        Object[] destArr = Arrays.copyOf(prevArray, newSize, prevArray.getClass());
+        if (i < newSize) {
+            System.arraycopy(prevArray, i + 1, destArr, i, newSize - i);
         }
-        return dest_arr;
+        return (E[]) destArr;
     }
 
     @SuppressWarnings("unchecked")
-    public boolean contains(T object) {
-        T[] prevArray = (T[])VALUE.getOpaque(this);
+    private static<E> E[] equalsRemove(E[] prevArray, E[] empty, Object e) {
+        int pl = prevArray.length;
+        int newSize = pl - 1;
+        if (newSize == 0) return empty;
+        for (int i = 0; i < pl; i++) {
+            E pe = prevArray[i];
+            if (pe == e || pe != null && pe.equals(e)) {
+                Object[] destArr = Arrays.copyOf(prevArray, newSize, prevArray.getClass());
+                if (i < newSize) {
+                    System.arraycopy(prevArray, i + 1, destArr, i, newSize - i);
+                }
+                return (E[]) destArr;
+            }
+        }
+        throw new IllegalStateException("Item not found.");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static<E> E[] fastRemove(E[] prevArray, E[] empty, E e) {
+        int pl = prevArray.length;
+        int newSize = pl - 1;
+        if (newSize == 0) return empty;
+        for (int i = 0; i < pl; i++) {
+            if (prevArray[i] == e) {
+                Object[] destArr = Arrays.copyOf(prevArray, newSize, prevArray.getClass());
+                if (i < newSize) {
+                    System.arraycopy(prevArray, i + 1, destArr, i, newSize - i);
+                }
+                return (E[]) destArr;
+            }
+        }
+        throw new IllegalStateException("Item not found.");
+    }
+
+    public boolean contains(Object object) {
+        Object[] prevArray = (Object[])VALUE.getOpaque(this);
         int al = prevArray.length;
         for (int i = 0; i < al; i++) {
-            T toTest = prevArray[i];
+            Object toTest = prevArray[i];
             if (toTest == object || (toTest != null && toTest.equals(object))) return true;
         }
         return false;
     }
 
+    /**
+     * <p> The comparison methodology used is as follows:
+     * <pre>{@code
+     *     void method(Object o) {
+     *        // ... ...
+     *         for (int i = 0; i < pl; i++) {
+     *             T toTest = prev[i];
+     *             // inner objects will be forced to use their
+     *             // respective equal(Object) methods against the parameter object.
+     *             if (toTest.equals(o)) {
+     *                // proceed to remove `o`
+     *             }
+     *         }
+     *     }
+     * }</pre>
+     * */
     @SuppressWarnings("unchecked")
-    public boolean contains(Predicate<T> when) {
+    public T get(Object object) {
         T[] prevArray = (T[])VALUE.getOpaque(this);
         int al = prevArray.length;
         for (int i = 0; i < al; i++) {
             T toTest = prevArray[i];
-            if (toTest != null && when.test(toTest)) return true;
+            if (toTest == object || (toTest != null && toTest.equals(object))) return toTest;
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    public boolean contains(Predicate<T> when) {
+        Object[] prevArray = (Object[])VALUE.getOpaque(this);
+        int al = prevArray.length;
+        for (int i = 0; i < al; i++) {
+            Object toTest = prevArray[i];
+            if (toTest != null && when.test((T)toTest)) return true;
         }
         return false;
     }
 
-    /**Wil shortC upon first one found*/
-    private static<E> int indexOf(E[] prevArray, Predicate<E> when) {
-        for (int i = 0; i < prevArray.length; i++) {
-            E toTest = prevArray[i];
-            if (toTest != null && when.test(toTest)) return i;
+    /**
+     * <p> The comparison methodology used is as follows:
+     * <pre>{@code
+     *     void method(Object o) {
+     *        // ... ...
+     *         for (int i = 0; i < pl; i++) {
+     *             // inner objects will be forced to use their
+     *             // respective equal(Object) methods against the parameter object.
+     *             if (prev[i] == o) {
+     *                // proceed to remove `o`
+     *             }
+     *         }
+     *     }
+     * }</pre>
+     * */
+    private static final int fastIndexOf(Object[] prevArray, Object instance) {
+        int pl = prevArray.length;
+        for (int i = 0; i < pl; i++) {
+            Object toTest = prevArray[i];
+            if (toTest == instance) return i;
         }
         return -1;
     }

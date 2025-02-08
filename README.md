@@ -1,5 +1,5 @@
 # Concur
-[latest version] = `1.1.2`
+[latest version] = `1.1.3`
 
 Additional concurrent utilities for the Java environment.
 
