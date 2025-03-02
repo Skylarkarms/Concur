@@ -65,7 +65,14 @@ public final class CopyOnWriteArray<T> implements Supplier<T[]> {
 
     private static Object[] getNext(Object t, Object[] prev) {
         int newI = prev.length;
-        Object[] clone = Arrays.copyOf(prev, newI + 1, prev.getClass());
+
+        int newLength = newI + 1;
+        Class<? extends Object[]> newType = prev.getClass();
+        Object[] clone = (newType == Object[].class)
+                ? new Object[newLength]
+                : (Object[]) Array.newInstance(newType.getComponentType(), newLength);
+        System.arraycopy(prev, 0, clone, 0,prev.length);
+
         clone[newI] = t;
         return clone;
     }

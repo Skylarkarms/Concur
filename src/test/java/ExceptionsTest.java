@@ -44,22 +44,12 @@ public class ExceptionsTest {
         System.out.println("<<<<<<<<||||||>>>>>>>");
         Locks.robustPark(Duration.ofSeconds(5).toNanos());
 
-//        LazyHolder.setGlobalConfig(
-//                LazyHolder.SpinnerConfig.timeout(TimeUnit.SECONDS.toMillis(3))
-//        );
-
         System.err.println("<<<<<<<<||||||>>>>>>>");
         Locks.robustPark(Duration.ofSeconds(5).toNanos());
 
         LazyHolder.setDebug(true);
-//        LazyHolder.SpinnerConfig customConfig = LazyHolder.SpinnerConfig.custom(
-//                params -> {
-//                    params.amplify(3);
-//                }
-//        );
 
         Locks.ExceptionConfig<RuntimeException> shortRT = Locks.ExceptionConfig.runtime(
-//                        builder -> builder.setDurationUnit()
                 builder -> {
                     builder.setTotal(3500, TimeUnit.MILLISECONDS);
                     builder.setInitialWaitFraction(200);
@@ -70,17 +60,10 @@ public class ExceptionsTest {
 
         LazyHolder.setHolderConfig(
                 shortRT
-//                Locks.ExceptionConfig.runtime(
-////                        builder -> builder.setDurationUnit()
-//                        builder -> builder.setDurationUnit(3500, TimeUnit.MILLISECONDS)
-//                )
         );
 
         record TAG(double i, String name, String tag){}
         LazyHolder.Supplier<TAG> integerSupplier = LazyHolder.Supplier.getNew(
-//                Locks.ExceptionConfig.largeRuntime(),
-//                customConfig,
-//                params -> params.amplify(3),
                 () -> {
                     long start = System.nanoTime();
                     Locks.robustPark(4, TimeUnit.SECONDS);
@@ -118,8 +101,6 @@ public class ExceptionsTest {
                                             + "\n error = \n" + e.getCause().toString().indent(3)
                                             + " prov = " + formatStack(es).indent(3)
                                             + " at = \n" + Thread.currentThread().getStackTrace()[1]
-//                                            + "\n error = \n" + e.getCause().getMessage().indent(3)
-//                                            + "\n prov = \n" + LazyHolder.formatStack(es).indent(3)
                                     );
                                 }
                             }
@@ -150,15 +131,12 @@ public class ExceptionsTest {
                         );
                     } catch (Exception e) {
                         long end = System.nanoTime();
-//                        e.printStackTrace();
                         StackTraceElement[] es = e.getStackTrace();
                         System.err.println(
                                 "[DESTROY FAILED] at = " + Chrono.formatNanos(end - start)
                                 + "\n error = \n" + e.getCause().toString().indent(3)
                                 + " prov = " + formatStack(es).indent(3)
                                 + " at = \n" + Thread.currentThread().getStackTrace()[1].toString().indent(3)
-//                                + "\n error = \n" + e.getCause().getMessage().indent(3)
-//                                + "\n prov = \n" + es[0].toString().indent(3)
                         );
                     }
                 }
