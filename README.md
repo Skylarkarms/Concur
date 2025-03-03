@@ -1,12 +1,12 @@
 # Concur
-[latest version] = `1.1.4`
+[latest version] = `1.1.5`
 
 Additional concurrent utilities for the Java environment.
 
 [found in]:
-   - [`io.github.skylarkarms:lambdaprofiler:`](https://github.com/Skylarkarms/LambdaProfiler)
-   - [`io.github.skylarkarms:solo:`](https://github.com/Skylarkarms/solo)
-   - [`io.github.skylarkarms:requestpoolhttp:`](https://github.com/Skylarkarms/RequestPoolHTTP)
+ - [`io.github.skylarkarms:lambdaprofiler:`](https://github.com/Skylarkarms/LambdaProfiler)
+ - [`io.github.skylarkarms:solo:`](https://github.com/Skylarkarms/solo)
+ - [`io.github.skylarkarms:requestpoolhttp:`](https://github.com/Skylarkarms/RequestPoolHTTP)
 
 ### Implementation
 In your `build.gradle` file

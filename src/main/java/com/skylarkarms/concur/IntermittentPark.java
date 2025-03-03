@@ -111,6 +111,22 @@ public class IntermittentPark {
             return nanSup.getAsLong();
         }
 
+        public int getLower_bound() {
+            return lower_bound;
+        }
+
+        public int getHigher_bound() {
+            return higher_bound;
+        }
+
+        public int getDelta() {
+            return delta;
+        }
+
+        public TimeUnit getUnit() {
+            return unit;
+        }
+
         @Override
         public String toString() {
             return "Time{" +
